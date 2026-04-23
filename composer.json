@@ -2,7 +2,6 @@
     "name": "nabysyphpapi/xnabysygs-cli",
     "description": "CLI globale du framework NAbySyGS — commandes nsy et koro",
     "type": "project",
-    "version": "1.3.0",
     "license": "MIT",
     "authors": [
         {
