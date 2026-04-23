@@ -138,33 +138,46 @@ class NAbySyCLI
             exit(1);
         }
 
-        $createAction = isset($opts['a']) || isset($opts['action']);
-        $createOrm    = isset($opts['o']) || isset($opts['orm']);
-        $table        = $opts['t'] ?? $opts['table'] ?? null;
-
-        if ($createOrm && empty($table)) {
-            self::error("L'option -o (ORM) nécessite -t <table>.\n  Exemple: nsy create categorie {$nom} -o -t ma_table");
-            exit(1);
-        }
-
-        self::info("Création de la catégorie " . self::B . self::C . $nom . self::R . "...");
-        if ($createAction) self::dim("  → Fichier action activé");
-        if ($createOrm)    self::dim("  → Classe ORM activée (table: {$table})");
+        $hasAction = isset($opts['a']) || isset($opts['action']);
+        $hasOrm    = isset($opts['o']) || isset($opts['orm']);
+        $hasTable  = isset($opts['t']) || isset($opts['table']);
+        $table     = $opts['t'] ?? $opts['table'] ?? null;
 
         if (empty(self::$root)) {
             self::error("Racine du projet introuvable. Utilisez --root <chemin>.");
             exit(1);
         }
 
-        $boolAction = $createAction ? 'true'  : 'false';
-        $boolOrm    = $createOrm    ? 'true'  : 'false';
-        $tableParam = $table        ? '"' . $table . '"' : 'null';
+        self::info("Création de la catégorie " . self::B . self::C . $nom . self::R . "...");
+        if ($hasAction) self::dim("  → Fichier action activé");
+        if ($hasOrm)    self::dim("  → Classe ORM activée" . ($table ? " (table: {$table})" : ''));
 
-        $line    = 'N::$GSModManager::CreateCategorie("' . $nom . '", ' . $boolAction . ', ' . $boolOrm . ', ' . $tableParam . ');';
+        // ── Construction de l'appel en ne passant que les paramètres explicites ──
+        // On tronque à droite dès que les paramètres suivants ne sont pas fournis,
+        // laissant le framework appliquer ses propres valeurs par défaut.
+        if (!$hasAction && !$hasOrm && !$hasTable) {
+            // Aucune option → appel minimal
+            $line = 'N::$GSModManager::CreateCategorie("' . $nom . '");';
+        } elseif (!$hasOrm && !$hasTable) {
+            // Seulement -a
+            $line = 'N::$GSModManager::CreateCategorie("' . $nom . '", ' . ($hasAction ? 'true' : 'false') . ');';
+        } elseif (!$hasTable) {
+            // -a et/ou -o, pas de table
+            $line = 'N::$GSModManager::CreateCategorie("' . $nom . '", '
+                . ($hasAction ? 'true' : 'false') . ', '
+                . ($hasOrm   ? 'true' : 'false') . ');';
+        } else {
+            // Tous les paramètres fournis
+            $line = 'N::$GSModManager::CreateCategorie("' . $nom . '", '
+                . ($hasAction ? 'true' : 'false') . ', '
+                . ($hasOrm   ? 'true' : 'false') . ', '
+                . '"' . $table . '");';
+        }
+
         $written = self::writeToStructureFile($nom, $line);
         if (!$written) return;
 
-        if ($createOrm && $table) {
+        if ($hasOrm && $table) {
             $nomClass = 'x' . strtoupper(substr($nom, 0, 1)) . substr($nom, 1);
             $lineOrm  = 'N::$GSModManager::GenerateORMClass("' . $nomClass . '", "' . $nom . '", "' . $table . '");';
             self::writeToStructureFile($nom, $lineOrm, false);
@@ -426,8 +439,8 @@ class NAbySyCLI
     //  Cas 1 : décommenter //include_once 'db_structure.php' si présent
     //  T1    : insérer après un include_once db_structure déjà actif
     //  T2    : insérer avant N::$UrlRouter ou N::ReadHttpRequest
-    //  T3    : insérer avant la fin du fichier fichier
-    //  T4    : append en fin de fichier
+    //  T3    : insérer avant le tag php final
+    //  T4    : append en fin de fichier (pas de tag php final présent)
     // ============================================================
     private static function activateIncludeInAppinfos(string $structFile): void
     {
@@ -495,7 +508,7 @@ class NAbySyCLI
             }
         }
 
-        // ── T3 : avant le tag php final ───────────────────────────
+        // ── T3 : avant le tag php final ──────────────────────
         if (!$inserted) {
             $newContenu = preg_replace(
                 '/\?>\s*$/',
@@ -508,7 +521,7 @@ class NAbySyCLI
             }
         }
 
-        // ── T4 : append en fin de fichier (pas de le tag php final présent) ──
+        // ── T4 : append en fin de fichier (pas de tag php final présent) ──
         if (!$inserted) {
             $contenu .= PHP_EOL . $includeLine . ' // Ajouté par nsy CLI' . PHP_EOL;
             $inserted  = true;
