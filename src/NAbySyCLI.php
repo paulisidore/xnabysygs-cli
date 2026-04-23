@@ -10,13 +10,16 @@
 //    create categorie <nom> [-a] [-o] [-t <table>]  (alias: c cat)
 //    create action    <nom>                          (alias: c a)
 //    create orm       <nom> <table> [dossier]        (alias: c o)
-//    create route     <nom> <dossier>                (alias: c r)
+//    create route     <nom> [dossier]                (alias: c r)
+//    db update                                       (alias: db u)
 //    version                                         (alias: v)
 //    help                                            (alias: h)
 //
 //  Options globales :
-//    --root <chemin>   Racine du projet hôte
-//    --debug           Mode verbeux
+//    --root   <chemin>   Racine du projet hôte
+//    --struct <fichier>  Fichier de structure (défaut: db_structure.php)
+//    --url    <url>      URL de l'API (prioritaire sur __SERVER_URL__)
+//    --debug             Mode verbeux
 // ============================================================
 
 class NAbySyCLI
@@ -30,7 +33,10 @@ class NAbySyCLI
     private const B  = "\033[1m";
     private const D  = "\033[2m";
 
-    private const VERSION = '1.1.0';
+    private const VERSION = '1.3.0';
+
+    // Nom par défaut du fichier de structure généré
+    private const DEFAULT_STRUCT_FILE = 'db_structure.php';
 
     // ── Alias de commandes ───────────────────────────────────
     private const ALIASES = [
@@ -42,20 +48,22 @@ class NAbySyCLI
         'a'   => 'action',
         'o'   => 'orm',
         'r'   => 'route',
+        // sous-commandes db
+        'u'   => 'update',
     ];
 
-    private static bool  $debug    = false;
-    private static string $root    = '';
+    private static bool   $debug      = false;
+    private static string $root       = '';
+    private static string $structFile = '';   // chemin absolu vers db_structure.php
+    private static string $apiUrl     = '';   // URL de l'API pour db update
 
     // ============================================================
     //  Point d'entrée
     // ============================================================
     public static function run(array $argv): void
     {
-        // Nom de la commande appelée (nsy ou koro)
         $bin = basename($argv[0]);
 
-        // Extraire options globales avant de parser les commandes
         [$args, $opts] = self::parseArgs(array_slice($argv, 1));
 
         self::$debug = isset($opts['debug']);
@@ -69,11 +77,25 @@ class NAbySyCLI
             }
             self::$root = $root;
         } else {
-            // Remonter depuis getcwd() pour trouver la racine du projet
             self::$root = self::findHostRoot(getcwd()) ?? '';
         }
 
-        // Résoudre les alias de commande principale
+        // --struct : fichier de structure personnalisé ou défaut
+        if (isset($opts['struct'])) {
+            $structOpt = $opts['struct'];
+            // Chemin absolu fourni ou relatif à la racine
+            self::$structFile = self::isAbsolutePath($structOpt)
+                ? $structOpt
+                : self::$root . ltrim($structOpt, DIRECTORY_SEPARATOR . '/');
+        } else {
+            self::$structFile = self::$root . self::DEFAULT_STRUCT_FILE;
+        }
+
+        // --url : prioritaire sur __SERVER_URL__ de appinfos.php
+        if (isset($opts['url'])) {
+            self::$apiUrl = rtrim($opts['url'], '/');
+        }
+
         $cmd = strtolower($args[0] ?? 'help');
         $cmd = self::ALIASES[$cmd] ?? $cmd;
 
@@ -81,6 +103,7 @@ class NAbySyCLI
 
         match ($cmd) {
             'create'  => self::cmdCreate(array_slice($args, 1), $opts),
+            'db'      => self::cmdDb(array_slice($args, 1), $opts),
             'version' => self::cmdVersion(),
             'help'    => self::cmdHelp($bin),
             default   => self::cmdUnknown($cmd, $bin),
@@ -129,21 +152,38 @@ class NAbySyCLI
         if ($createAction) self::dim("  → Fichier action activé");
         if ($createOrm)    self::dim("  → Classe ORM activée (table: {$table})");
 
-        $N = self::loadNAbySy();
-        if (!$N) return;
-
-        try {
-            $result = \N::$GSModManager::CreateCategorie($nom, $createAction, $createOrm, $table);
-            if ($result) {
-                self::success("Catégorie " . self::B . $nom . self::R . self::G . " créée avec succès !");
-                self::dim("  Dossier : " . self::$root . "gs" . DIRECTORY_SEPARATOR . $nom);
-            } else {
-                self::error("Échec de la création de la catégorie '{$nom}'.");
-            }
-        } catch (\Throwable $e) {
-            self::error("Erreur : " . $e->getMessage());
-            if (self::$debug) self::dim($e->getTraceAsString());
+        // ── Vérification racine ──────────────────────────────
+        if (empty(self::$root)) {
+            self::error("Racine du projet introuvable. Utilisez --root <chemin>.");
+            exit(1);
         }
+
+        // ── Écriture dans le fichier de structure ────────────
+        $boolAction = $createAction ? 'true'  : 'false';
+        $boolOrm    = $createOrm    ? 'true'  : 'false';
+        $tableParam = $table        ? '"' . $table . '"' : 'null';
+
+        $line = 'N::$GSModManager::CreateCategorie("' . $nom . '", ' . $boolAction . ', ' . $boolOrm . ', ' . $tableParam . ');';
+
+        $written = self::writeToStructureFile($nom, $line);
+        if (!$written) return; // erreur déjà affichée
+
+        // Si ORM demandé, on l'ajoute également dans le même bloc
+        if ($createOrm && $table) {
+            $nomClass = 'x' . strtoupper(substr($nom, 0, 1)) . substr($nom, 1);
+            $lineOrm  = 'N::$GSModManager::GenerateORMClass("' . $nomClass . '", "' . $nom . '", "' . $table . '");';
+            self::writeToStructureFile($nom, $lineOrm, false); // false = pas de nouveau bloc
+        }
+
+        self::success(
+            "Catégorie " . self::B . $nom . self::R . self::G
+            . " enregistrée dans " . self::$structFile
+        );
+        self::dim("  Incluez ce fichier dans appinfos.php si ce n'est pas encore fait :");
+        self::dim('  include_once __DIR__ . "/' . self::DEFAULT_STRUCT_FILE . '";');
+
+        // ── db update automatique ────────────────────────────
+        self::cmdDbUpdate();
     }
 
     // ── create action ───────────────────────────────────────
@@ -155,25 +195,16 @@ class NAbySyCLI
             exit(1);
         }
 
-        self::info("Création du fichier action " . self::B . self::C . $nom . self::R . "...");
+        self::info("Enregistrement du fichier action " . self::B . self::C . $nom . self::R . "...");
 
-        $N = self::loadNAbySy();
-        if (!$N) return;
+        $line    = 'N::$GSModManager::GenerateActionAPIFile("' . $nom . '");';
+        $written = self::writeToStructureFile($nom, $line);
+        if (!$written) return;
 
-        try {
-            $result = \N::$GSModManager::GenerateActionAPIFile($nom);
-            if ($result && (is_bool($result) ? $result : $result->OK == 1)) {
-                $src = is_object($result) ? $result->Source : '';
-                self::success("Fichier action " . self::B . $nom . self::R . self::G . " créé !");
-                if ($src) self::dim("  Fichier : {$src}");
-            } else {
-                $msg = is_object($result) ? ($result->TxErreur ?? '') : '';
-                self::error("Échec : {$msg}");
-            }
-        } catch (\Throwable $e) {
-            self::error("Erreur : " . $e->getMessage());
-            if (self::$debug) self::dim($e->getTraceAsString());
-        }
+        self::success("Action " . self::B . $nom . self::R . self::G . " enregistrée dans " . self::$structFile);
+
+        // ── db update automatique ────────────────────────────
+        self::cmdDbUpdate();
     }
 
     // ── create orm ──────────────────────────────────────────
@@ -188,29 +219,21 @@ class NAbySyCLI
             exit(1);
         }
 
-        // Si dossier non fourni, utiliser gs/<nom> par défaut
         if (empty($dossier)) {
-            $dossier = self::$root . 'gs' . DIRECTORY_SEPARATOR . strtolower($nom);
+            $dossier = strtolower($nom);
         }
 
-        self::info("Création de la classe ORM " . self::B . self::C . $nom . self::R
+        self::info("Enregistrement de la classe ORM " . self::B . self::C . $nom . self::R
             . " (table: " . self::Y . $table . self::R . ")...");
 
-        $N = self::loadNAbySy();
-        if (!$N) return;
+        $line    = 'N::$GSModManager::GenerateORMClass("' . $nom . '", "' . $dossier . '", "' . $table . '");';
+        $written = self::writeToStructureFile($nom, $line);
+        if (!$written) return;
 
-        try {
-            $result = \N::$GSModManager::GenerateORMClass($nom, $dossier, $table);
-            if ($result && $result->OK == 1) {
-                self::success("Classe ORM " . self::B . $nom . self::R . self::G . " créée !");
-                if ($result->Source) self::dim("  Fichier : {$result->Source}");
-            } else {
-                self::error("Échec : " . ($result->TxErreur ?? ''));
-            }
-        } catch (\Throwable $e) {
-            self::error("Erreur : " . $e->getMessage());
-            if (self::$debug) self::dim($e->getTraceAsString());
-        }
+        self::success("ORM " . self::B . $nom . self::R . self::G . " enregistré dans " . self::$structFile);
+
+        // ── db update automatique ────────────────────────────
+        self::cmdDbUpdate();
     }
 
     // ── create route ────────────────────────────────────────
@@ -220,31 +243,277 @@ class NAbySyCLI
         $dossier = $args[1] ?? '';
 
         if (empty($nom)) {
-            self::error("Nom requis.\n  Usage: nsy create route <nom> <dossier>");
+            self::error("Nom requis.\n  Usage: nsy create route <nom> [dossier]");
             exit(1);
         }
 
         if (empty($dossier)) {
-            $dossier = self::$root . 'gs' . DIRECTORY_SEPARATOR . strtolower($nom);
+            $dossier = strtolower($nom);
         }
 
-        self::info("Création du contrôleur de route " . self::B . self::C . $nom . self::R . "...");
+        self::info("Enregistrement du contrôleur de route " . self::B . self::C . $nom . self::R . "...");
 
-        $N = self::loadNAbySy();
-        if (!$N) return;
+        $line    = 'N::$GSModManager::GenerateUrlRouteController("' . $nom . '", "' . $dossier . '");';
+        $written = self::writeToStructureFile($nom, $line);
+        if (!$written) return;
 
-        try {
-            $result = \N::$GSModManager::GenerateUrlRouteController($nom, $dossier);
-            if ($result && $result->OK == 1) {
-                self::success("Contrôleur de route " . self::B . $nom . self::R . self::G . " créé !");
-                if ($result->Source) self::dim("  Fichier : {$result->Source}");
-            } else {
-                self::error("Échec : " . ($result->TxErreur ?? ''));
+        self::success("Route " . self::B . $nom . self::R . self::G . " enregistrée dans " . self::$structFile);
+
+        // ── db update automatique ────────────────────────────
+        self::cmdDbUpdate();
+    }
+
+    // ============================================================
+    //  Commande : db
+    // ============================================================
+    private static function cmdDb(array $args, array $opts): void
+    {
+        $sub = strtolower($args[0] ?? '');
+        $sub = self::ALIASES[$sub] ?? $sub;
+
+        match ($sub) {
+            'update' => self::cmdDbUpdate(),
+            default  => self::error(
+                "Sous-commande 'db {$sub}' inconnue.\n"
+                . "  Utilisez: update (u)"
+            ),
+        };
+    }
+
+    // ============================================================
+    //  Commande : db update
+    //
+    //  Lit __SERVER_URL__ et __BASEDIR__ depuis appinfos.php via regex
+    //  (sans l'inclure pour éviter la connexion BDD), puis appelle
+    //  GET {url}/?Action=NABYSY_STRUCURE_UPDATE
+    // ============================================================
+    private static function cmdDbUpdate(): void
+    {
+        self::info("Mise à jour de la structure via l'API" . self::R . "...");
+
+        // ── Résolution de l'URL ──────────────────────────────
+        $url = self::resolveApiUrl();
+        if ($url === null) {
+            self::error(
+                "URL de l'API introuvable.\n"
+                . "  Solutions :\n"
+                . "  • Ajoutez " . self::Y . "__SERVER_URL__" . self::R2
+                . " dans appinfos.php (généré par setup.html)\n"
+                . "  • Ou passez " . self::Y . "--url http://votre-api.com" . self::R2
+                . " à la commande"
+            );
+            return;
+        }
+
+        // Construction de l'URL finale
+        $actionUrl = $url . '/?Action=NABYSY_STRUCURE_UPDATE';
+        self::dim("  → GET " . $actionUrl);
+
+        // ── Appel HTTP GET ───────────────────────────────────
+        $response = self::httpGet($actionUrl);
+
+        if ($response === null) {
+            self::error("Impossible de joindre l'API : " . $actionUrl);
+            return;
+        }
+
+        if (self::$debug) {
+            self::dim("  Réponse brute : " . $response);
+        }
+
+        // ── Interprétation de la réponse ─────────────────────
+        $json = json_decode($response);
+
+        if ($json === null) {
+            self::error("Réponse invalide (non JSON) :\n  " . substr($response, 0, 200));
+            return;
+        }
+
+        if (isset($json->OK) && $json->OK == 1) {
+            self::success("Structure mise à jour avec succès !");
+        } else {
+            $txErreur = $json->TxErreur ?? 'Erreur inconnue';
+            self::error("Échec de la mise à jour : " . $txErreur);
+        }
+    }
+
+    // ============================================================
+    //  Résolution de l'URL de l'API
+    //  Priorité : --url > __SERVER_URL__ dans appinfos.php
+    // ============================================================
+    private static function resolveApiUrl(): ?string
+    {
+        // Priorité 1 : --url passé manuellement
+        if (!empty(self::$apiUrl)) {
+            return self::$apiUrl;
+        }
+
+        // Priorité 2 : lire __SERVER_URL__ et __BASEDIR__ dans appinfos.php
+        if (empty(self::$root)) return null;
+
+        $appinfos = self::$root . 'appinfos.php';
+        if (!file_exists($appinfos)) return null;
+
+        $content = file_get_contents($appinfos);
+        if ($content === false) return null;
+
+        // Extraction de __SERVER_URL__ via regex (sans inclure le fichier)
+        $serverUrl = null;
+        if (preg_match("/const\s+__SERVER_URL__\s*=\s*'([^']*)'/", $content, $m) ||
+            preg_match('/const\s+__SERVER_URL__\s*=\s*"([^"]*)"/', $content, $m)) {
+            $serverUrl = rtrim($m[1], '/');
+        }
+
+        if (empty($serverUrl)) return null;
+
+        // Extraction de __BASEDIR__ (optionnel)
+        $baseDir = '';
+        if (preg_match("/define\s*\(\s*'__BASEDIR__'\s*,\s*\"([^\"]*)\"\s*\)/", $content, $m) ||
+            preg_match("/define\s*\(\s*'__BASEDIR__'\s*,\s*'([^']*)'\s*\)/", $content, $m) ||
+            preg_match("/const\s+__BASEDIR__\s*=\s*'([^']*)'/", $content, $m) ||
+            preg_match('/const\s+__BASEDIR__\s*=\s*"([^"]*)"/', $content, $m)) {
+            $baseDir = trim($m[1], '/');
+        }
+
+        $url = $serverUrl;
+        if (!empty($baseDir)) {
+            $url .= '/' . $baseDir;
+        }
+
+        return $url;
+    }
+
+    // ============================================================
+    //  HTTP GET léger (curl si disponible, sinon file_get_contents)
+    // ============================================================
+    private static function httpGet(string $url): ?string
+    {
+        // Tentative avec cURL (plus robuste)
+        if (function_exists('curl_init')) {
+            $ch = curl_init($url);
+            curl_setopt_array($ch, [
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_TIMEOUT        => 15,
+                CURLOPT_FOLLOWLOCATION => true,
+                CURLOPT_SSL_VERIFYPEER => false,
+                CURLOPT_HTTPHEADER     => ['Accept: application/json'],
+            ]);
+            $response = curl_exec($ch);
+            $error    = curl_error($ch);
+            curl_close($ch);
+
+            if ($response === false) {
+                self::dim("  cURL erreur : " . $error);
+                return null;
             }
-        } catch (\Throwable $e) {
-            self::error("Erreur : " . $e->getMessage());
-            if (self::$debug) self::dim($e->getTraceAsString());
+            return $response;
         }
+
+        // Fallback : file_get_contents avec contexte
+        $ctx = stream_context_create([
+            'http' => [
+                'method'  => 'GET',
+                'timeout' => 15,
+                'header'  => "Accept: application/json\r\n",
+            ],
+        ]);
+
+        $response = @file_get_contents($url, false, $ctx);
+        return $response === false ? null : $response;
+    }
+    //
+    //  $categorie  : nom du groupe (bloc de commentaires)
+    //  $line       : ligne PHP à insérer
+    //  $newBloc    : true  = créer un nouveau bloc si la catégorie est absente
+    //                false = ajouter la ligne dans un bloc existant ou en fin de fichier
+    // ============================================================
+    private static function writeToStructureFile(string $categorie, string $line, bool $newBloc = true): bool
+    {
+        $file = self::$structFile;
+
+        // ── Initialisation du fichier s'il n'existe pas ──────
+        if (!file_exists($file)) {
+            $header = '<?php' . PHP_EOL
+                . '// ============================================================' . PHP_EOL
+                . '//  NAbySyGS — Fichier de structure généré automatiquement' . PHP_EOL
+                . '//  Généré par : nsy CLI v' . self::VERSION . PHP_EOL
+                . '//  Ce fichier doit être inclus dans appinfos.php :' . PHP_EOL
+                . '//    include_once __DIR__ . "/" . \'' . self::DEFAULT_STRUCT_FILE . '\';' . PHP_EOL
+                . '// ============================================================' . PHP_EOL
+                . PHP_EOL;
+
+            if (file_put_contents($file, $header) === false) {
+                self::error("Impossible de créer le fichier de structure : {$file}");
+                return false;
+            }
+            self::dim("  Fichier de structure créé : {$file}");
+        }
+
+        // ── Lecture du contenu actuel ────────────────────────
+        $contenu = file_get_contents($file);
+        if ($contenu === false) {
+            self::error("Impossible de lire le fichier de structure : {$file}");
+            return false;
+        }
+
+        // ── Détection si la ligne exacte existe déjà ─────────
+        if (str_contains($contenu, $line)) {
+            // Trouver le numéro de ligne pour le message d'erreur
+            $lignes    = explode(PHP_EOL, $contenu);
+            $numLigne  = 0;
+            foreach ($lignes as $i => $l) {
+                if (str_contains($l, $line)) {
+                    $numLigne = $i + 1;
+                    break;
+                }
+            }
+            self::error(
+                "L'entrée existe déjà dans " . self::B . $file . self::R . self::R2
+                . " (ligne " . self::B . $numLigne . self::R . self::R2 . ") :"
+            );
+            self::dim("  " . $line);
+            return false;
+        }
+
+        // ── Construction du bloc ou ajout dans un bloc existant ──
+        $marqueurDebut = '// ── categorie: ' . $categorie . ' ';
+        $marqueurFin   = '// ── end: ' . $categorie . ' ';
+        $date          = date('Y-m-d H:i');
+
+        if ($newBloc && !str_contains($contenu, $marqueurDebut)) {
+            // Nouveau bloc complet
+            $separateur = str_repeat('─', max(0, 52 - strlen($categorie)));
+            $bloc = PHP_EOL
+                . '// ── categorie: ' . $categorie . ' ' . $separateur . ' ' . $date . ' ──' . PHP_EOL
+                . $line . PHP_EOL
+                . '// ── end: ' . $categorie . ' ' . str_repeat('─', max(0, 54 - strlen($categorie))) . PHP_EOL;
+
+            if (file_put_contents($file, $bloc, FILE_APPEND) === false) {
+                self::error("Impossible d'écrire dans le fichier de structure : {$file}");
+                return false;
+            }
+
+        } else {
+            // Insérer AVANT le marqueur de fin du bloc existant
+            if (str_contains($contenu, $marqueurFin)) {
+                $contenu = str_replace(
+                    $marqueurFin,
+                    $line . PHP_EOL . $marqueurFin,
+                    $contenu
+                );
+            } else {
+                // Bloc sans marqueur de fin ou newBloc=false sans bloc existant
+                $contenu .= $line . PHP_EOL;
+            }
+
+            if (file_put_contents($file, $contenu) === false) {
+                self::error("Impossible d'écrire dans le fichier de structure : {$file}");
+                return false;
+            }
+        }
+
+        self::dim("  → Écrit dans : {$file}");
+        return true;
     }
 
     // ============================================================
@@ -275,19 +544,28 @@ class NAbySyCLI
 
   {$g}create{$r} {$d}(alias: c){$r}
     {$y}categorie{$r} {$d}(cat){$r}  <nom> [-a] [-o] [-t <table>]
-        Crée une catégorie NAbySyGS avec fichier action et/ou classe ORM.
+        Enregistre une catégorie NAbySyGS dans db_structure.php.
         {$d}-a, --action    Générer le fichier action API
         -o, --orm       Générer la classe ORM (nécessite -t)
         -t, --table     Nom de la table associée{$r}
 
     {$y}action{$r} {$d}(a){$r}      <nom>
-        Génère uniquement le fichier action API pour une catégorie.
+        Génère le fichier action API (direct si framework disponible,
+        sinon inscrit dans db_structure.php).
 
     {$y}orm{$r} {$d}(o){$r}         <nom> <table> [dossier]
-        Génère une classe ORM. Dossier optionnel (défaut: gs/<nom>).
+        Enregistre une classe ORM dans db_structure.php.
+        Dossier optionnel (défaut: <nom> en minuscules).
 
     {$y}route{$r} {$d}(r){$r}       <nom> [dossier]
-        Crée un contrôleur de route URL. Dossier optionnel (défaut: gs/<nom>).
+        Enregistre un contrôleur de route dans db_structure.php.
+        Dossier optionnel (défaut: <nom> en minuscules).
+
+  {$g}db{$r}
+    {$y}update{$r} {$d}(u){$r}
+        Appelle l'API du projet avec Action=NABYSY_STRUCURE_UPDATE.
+        L'URL est lue depuis __SERVER_URL__ dans appinfos.php.
+        Appelé automatiquement après chaque commande create.
 
   {$g}version{$r} {$d}(v){$r}
     Affiche la version du CLI.
@@ -296,8 +574,10 @@ class NAbySyCLI
     Affiche cette aide.
 
 {$b}Options globales:{$r}
-  {$y}--root{$r} <chemin>   Racine du projet hôte (sinon détectée automatiquement)
-  {$y}--debug{$r}           Afficher les détails d'exécution
+  {$y}--root{$r}   <chemin>   Racine du projet hôte (sinon détectée automatiquement)
+  {$y}--struct{$r} <fichier>  Fichier de structure cible (défaut: db_structure.php)
+  {$y}--url{$r}    <url>      URL de l'API (ex: http://monapi.local) — prioritaire sur __SERVER_URL__
+  {$y}--debug{$r}             Afficher les détails d'exécution
 
 {$b}Exemples:{$r}
   {$c}{$bin} create categorie client -a -o -t clients{$r}
@@ -314,70 +594,17 @@ class NAbySyCLI
   {$c}{$bin} c r produit gs/produit{$r}
 
   {$c}{$bin} create categorie client --root /var/www/monprojet{$r}
+  {$c}{$bin} create categorie client --struct structure/mon_fichier.php{$r}
+
+  {$c}{$bin} db update{$r}
+  {$c}{$bin} db update --url http://kssv5/api/shop{$r}
+  {$c}koro db u{$r}
 
 HELP;
     }
 
     // ============================================================
-    //  Chargement de NAbySyGS
-    // ============================================================
-    private static function loadNAbySy(): mixed
-    {
-        if (empty(self::$root)) {
-            self::error(
-                "Racine du projet introuvable.\n\n"
-                . "  " . self::D . "NAbySyGS recherche un dossier contenant vendor/ + composer.json\n"
-                . "  en remontant depuis le dossier courant." . self::R . "\n\n"
-                . "  Solutions :\n"
-                . "  • Lancez la commande depuis votre projet : " . self::Y . "cd /votre/projet && nsy ..." . self::R . "\n"
-                . "  • Ou spécifiez la racine : " . self::Y . "nsy ... --root /chemin/projet" . self::R
-            );
-            return null;
-        }
-
-        $appinfos = self::$root . 'appinfos.php';
-
-        if (!file_exists($appinfos)) {
-            self::error(
-                "appinfos.php introuvable dans : " . self::$root . "\n\n"
-                . "  " . self::D . "Votre projet NAbySyGS n'est pas encore configuré." . self::R . "\n\n"
-                . "  Lancez le setup en ouvrant " . self::Y . "setup.html" . self::R
-                . " dans votre navigateur."
-            );
-            return null;
-        }
-
-        // Charger le framework
-        try {
-            require_once self::$root . 'vendor/autoload.php';
-            include_once $appinfos;
-
-            if (!class_exists('N')) {
-                self::error("La classe N (NAbySyGS) n'a pas pu être chargée.");
-                return null;
-            }
-
-            if (!isset(\N::$GSModManager)) {
-                self::error(
-                    "N::\$GSModManager n'est pas initialisé.\n"
-                    . "  Vérifiez que votre appinfos.php initialise correctement NAbySyGS."
-                );
-                return null;
-            }
-
-            self::dim("✔ NAbySyGS chargé depuis : " . self::$root);
-            return true;
-
-        } catch (\Throwable $e) {
-            self::error("Erreur lors du chargement de NAbySyGS : " . $e->getMessage());
-            if (self::$debug) self::dim($e->getTraceAsString());
-            return null;
-        }
-    }
-
-    // ============================================================
     //  Détection dynamique de la racine du projet hôte
-    //  Remonte depuis $startDir jusqu'à trouver vendor/ + composer.json
     // ============================================================
     private static function findHostRoot(string $startDir, int $maxLevels = 10): ?string
     {
@@ -389,15 +616,26 @@ HELP;
                 return $current . DIRECTORY_SEPARATOR;
             }
             $parent = dirname($current);
-            if ($parent === $current) break; // racine système
+            if ($parent === $current) break;
             $current = $parent;
         }
         return null;
     }
 
     // ============================================================
+    //  Détection d'un chemin absolu (Windows + Unix)
+    // ============================================================
+    private static function isAbsolutePath(string $path): bool
+    {
+        // Unix : commence par /
+        if (str_starts_with($path, '/')) return true;
+        // Windows : C:\ ou C:/
+        if (preg_match('/^[A-Za-z]:[\\\\\/]/', $path)) return true;
+        return false;
+    }
+
+    // ============================================================
     //  Parser d'arguments CLI
-    //  Retourne [$args_positionnels, $options]
     // ============================================================
     private static function parseArgs(array $argv): array
     {
@@ -409,7 +647,6 @@ HELP;
             $arg = $argv[$i];
 
             if (str_starts_with($arg, '--')) {
-                // Option longue : --root /chemin  ou --debug
                 $key = substr($arg, 2);
                 if (isset($argv[$i + 1]) && !str_starts_with($argv[$i + 1], '-')) {
                     $opts[$key] = $argv[$i + 1];
@@ -418,7 +655,6 @@ HELP;
                     $opts[$key] = true;
                 }
             } elseif (str_starts_with($arg, '-') && strlen($arg) === 2) {
-                // Option courte : -a -o -t clients
                 $key = substr($arg, 1);
                 if (isset($argv[$i + 1]) && !str_starts_with($argv[$i + 1], '-')) {
                     $opts[$key] = $argv[$i + 1];
