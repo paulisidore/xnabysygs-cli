@@ -351,28 +351,11 @@ class NAbySyCLI
     // ============================================================
     private static function writeToStructureFile(string $categorie, string $line, bool $newBloc = true): bool
     {
-        $file  = self::$structFile;
-        $isNew = !file_exists($file);
+        $file = self::$structFile;
 
-        // ── Initialisation du fichier s'il n'existe pas ──────
-        if ($isNew) {
-            $header = '<?php' . PHP_EOL
-                . '// ============================================================' . PHP_EOL
-                . '//  NAbySyGS — Fichier de structure généré automatiquement' . PHP_EOL
-                . '//  Généré par : nsy CLI v' . self::VERSION . PHP_EOL
-                . '//  Ce fichier doit être inclus dans appinfos.php :' . PHP_EOL
-                . '//    include_once __DIR__ . "/" . \'' . self::DEFAULT_STRUCT_FILE . '\';' . PHP_EOL
-                . '// ============================================================' . PHP_EOL
-                . PHP_EOL;
-
-            if (file_put_contents($file, $header) === false) {
-                self::error("Impossible de créer le fichier de structure : {$file}");
-                return false;
-            }
-            self::dim("  Fichier de structure créé : {$file}");
-
-            // ── Activer/ajouter l'include dans appinfos.php ──
-            self::activateIncludeInAppinfos($file);
+        // ── Création du fichier s'il n'existe pas ─────────────
+        if (!file_exists($file)) {
+            self::ensureStructureFileExists($file);
         }
 
         // ── Lecture du contenu actuel ────────────────────────
@@ -441,48 +424,69 @@ class NAbySyCLI
     }
 
     // ============================================================
-    //  Activation de l'include_once dans appinfos.php
+    //  Création du fichier de structure s'il n'existe pas
     //
-    //  Priorités d'insertion (toujours AVANT le bloc routing) :
-    //  Cas 1 : décommenter //include_once 'db_structure.php' si présent
-    //  T1    : insérer après un include_once db_structure déjà actif
-    //  T2    : insérer avant N::$UrlRouter ou N::ReadHttpRequest
-    //  T3    : insérer avant le tag php final
-    //  T4    : append en fin de fichier (pas de tag php final présent)
+    //  Cas 1 : fichier par défaut db_structure.php
+    //          → créé avec en-tête documenté, contenu vide
+    //          → appinfos.php l'inclut déjà (décommenté dans le template)
+    //  Cas 2 : fichier custom --struct
+    //          → créé avec en-tête documenté
+    //          → include_once ajouté dans appinfos.php avant le routing
     // ============================================================
-    private static function activateIncludeInAppinfos(string $structFile): void
+    private static function ensureStructureFileExists(string $file): void
+    {
+        $isDefault    = (basename($file) === self::DEFAULT_STRUCT_FILE);
+        $relativePath = ltrim(str_replace(self::$root, '', $file), DIRECTORY_SEPARATOR . '/');
+
+        // ── En-tête du fichier ────────────────────────────────
+        $header = '<?php' . PHP_EOL
+            . '// ============================================================' . PHP_EOL
+            . '//  NAbySyGS — Fichier de structure des modules' . PHP_EOL
+            . '//  Généré par : nsy CLI v' . self::VERSION . PHP_EOL
+            . '//' . PHP_EOL
+            . '//  Ce fichier est automatiquement inclus dans appinfos.php.' . PHP_EOL
+            . '//  Il contient les appels de génération des catégories,' . PHP_EOL
+            . '//  classes ORM, actions et routes NAbySyGS.' . PHP_EOL
+            . '//  Il est exécuté au démarrage du framework, avant le routing.' . PHP_EOL
+            . '//' . PHP_EOL
+            . '//  Exemple :' . PHP_EOL
+            . '//    N::$GSModManager::CreateCategorie("client");' . PHP_EOL
+            . '//    N::$GSModManager::GenerateORMClass("xClient", "client", "clients");' . PHP_EOL
+            . '// ============================================================' . PHP_EOL
+            . PHP_EOL;
+
+        if (file_put_contents($file, $header) === false) {
+            self::error("Impossible de créer le fichier de structure : {$file}");
+            return;
+        }
+        self::dim("  Fichier de structure créé : {$file}");
+
+        // ── Cas 2 uniquement : ajouter l'include dans appinfos.php ──
+        // Pour db_structure.php (Cas 1), appinfos.php l'inclut déjà
+        // grâce au template_setup.php mis à jour.
+        if (!$isDefault) {
+            self::addIncludeToAppinfos($relativePath);
+        }
+    }
+
+    // ============================================================
+    //  Ajout d'un include_once custom dans appinfos.php
+    //  Uniquement pour les fichiers --struct non défaut
+    //  Insertion toujours AVANT le bloc routing
+    // ============================================================
+    private static function addIncludeToAppinfos(string $relativePath): void
     {
         if (empty(self::$root)) return;
 
         $appinfos = self::$root . 'appinfos.php';
         if (!file_exists($appinfos)) return;
 
-        $contenu = file_get_contents($appinfos);
+        $contenu     = file_get_contents($appinfos);
         if ($contenu === false) return;
 
-        // Nom du fichier relatif à la racine du projet
-        $relativePath = ltrim(str_replace(self::$root, '', $structFile), DIRECTORY_SEPARATOR . '/');
-        $includeLine  = 'include_once __DIR__ . \'' . DIRECTORY_SEPARATOR . $relativePath . '\';';
+        $includeLine = 'include_once __DIR__ . \'' . DIRECTORY_SEPARATOR . $relativePath . '\';';
 
-        // ── Cas 1 : fichier par défaut db_structure.php ──────
-        // Décommenter la ligne générée par setup.html si elle existe
-        if ($relativePath === self::DEFAULT_STRUCT_FILE) {
-            $pattern     = '/\/\/\s*include_once\s+[\'"]db_structure\.php[\'"]\s*;/';
-            $replacement = 'include_once __DIR__ . \'' . DIRECTORY_SEPARATOR . self::DEFAULT_STRUCT_FILE . '\'; // Activé par nsy CLI';
-
-            if (preg_match($pattern, $contenu)) {
-                $contenu = preg_replace($pattern, $replacement, $contenu);
-                if (file_put_contents($appinfos, $contenu) !== false) {
-                    self::dim("  → include_once db_structure.php décommenté dans appinfos.php");
-                } else {
-                    self::error("Impossible de modifier appinfos.php");
-                }
-                return;
-            }
-            // Ligne commentée absente → on continue vers les tentatives suivantes
-        }
-
-        // ── Vérifier que la ligne n'est pas déjà présente ────
+        // Déjà présent ?
         if (str_contains($contenu, $relativePath)) {
             self::dim("  → include_once déjà présent dans appinfos.php pour : {$relativePath}");
             return;
@@ -490,27 +494,25 @@ class NAbySyCLI
 
         $inserted = false;
 
-        // ── T1 : après un include_once db_structure ACTIF (non commenté) ──
+        // ── T1 : après un include_once db_structure actif ────
         $patternExisting = '/((?<!\/\/)include_once\s+[^\n]+db_structure[^\n]+\n)/';
-        if (!$inserted && preg_match($patternExisting, $contenu)) {
+        if (preg_match($patternExisting, $contenu)) {
             $contenu  = preg_replace(
                 $patternExisting,
                 '$1' . $includeLine . ' // Ajouté par nsy CLI' . PHP_EOL,
-                $contenu,
-                1
+                $contenu, 1
             );
             $inserted = true;
         }
 
-        // ── T2 : avant le bloc routing (N::$UrlRouter ou N::ReadHttpRequest) ──
+        // ── T2 : avant le bloc routing ───────────────────────
         if (!$inserted) {
             $patternRouting = '/([ \t]*(?:\/\/[^\n]*\n[ \t]*)*(?:N::\$UrlRouter|N::ReadHttpRequest))/';
             if (preg_match($patternRouting, $contenu)) {
                 $contenu  = preg_replace(
                     $patternRouting,
                     $includeLine . ' // Ajouté par nsy CLI' . PHP_EOL . '$1',
-                    $contenu,
-                    1
+                    $contenu, 1
                 );
                 $inserted = true;
             }
@@ -529,7 +531,7 @@ class NAbySyCLI
             }
         }
 
-        // ── T4 : append en fin de fichier (pas de tag php final présent) ──
+        // ── T4 : append en fin de fichier ────────────────────
         if (!$inserted) {
             $contenu .= PHP_EOL . $includeLine . ' // Ajouté par nsy CLI' . PHP_EOL;
             $inserted  = true;
