@@ -43,6 +43,7 @@ class NAbySyCLI
         'c'   => 'create',
         'h'   => 'help',
         'v'   => 'version',
+        'i'   => 'init',
         // sous-commandes create
         'cat' => 'categorie',
         'a'   => 'action',
@@ -100,9 +101,16 @@ class NAbySyCLI
 
         self::printBanner($bin);
 
+        // ── Détection du framework NAbySyGS dans le projet ──
+        // On vérifie uniquement pour les commandes qui en ont besoin
+        if (!in_array($cmd, ['help', 'version', 'init'])) {
+            self::checkAndInstallFramework();
+        }
+
         match ($cmd) {
             'create'  => self::cmdCreate(array_slice($args, 1), $opts),
             'db'      => self::cmdDb(array_slice($args, 1), $opts),
+            'init'    => self::cmdInit(array_slice($args, 1), $opts),
             'version' => self::cmdVersion(),
             'help'    => self::cmdHelp($bin),
             default   => self::cmdUnknown($cmd, $bin),
@@ -612,6 +620,170 @@ class NAbySyCLI
     }
 
     // ============================================================
+    //  Détection et installation automatique de nabysyphpapi/xnabysygs
+    // ============================================================
+    private static function checkAndInstallFramework(): void
+    {
+        if (empty(self::$root)) return;
+
+        $composerJson = self::$root . 'composer.json';
+        if (!file_exists($composerJson)) return;
+
+        $composer = json_decode(file_get_contents($composerJson), true);
+        $require  = array_merge(
+            $composer['require']         ?? [],
+            $composer['require-dev']     ?? []
+        );
+
+        // Framework déjà présent dans composer.json
+        if (isset($require['nabysyphpapi/xnabysygs'])) return;
+
+        // Framework absent → installation automatique
+        self::info("nabysyphpapi/xnabysygs non détecté dans ce projet.");
+        self::info("Installation automatique en cours...");
+        echo PHP_EOL;
+
+        self::runComposerRequire(self::$root);
+    }
+
+    // ============================================================
+    //  Commande : init <nom-projet>
+    // ============================================================
+    private static function cmdInit(array $args, array $opts): void
+    {
+        $nomProjet = $args[0] ?? '';
+        if (empty($nomProjet)) {
+            self::error("Nom du projet requis.\n  Usage: nsy init <nom-projet>");
+            exit(1);
+        }
+
+        $cwd          = getcwd() . DIRECTORY_SEPARATOR;
+        $composerJson = $cwd . 'composer.json';
+
+        // ── Bloquer si composer.json existe déjà ─────────────
+        if (file_exists($composerJson)) {
+            self::error(
+                "Un composer.json existe déjà dans : " . self::B . $cwd . self::R . self::R2 . "\n"
+                . "  Supprimez-le manuellement avant de relancer " . self::Y . "koro init" . self::R2 . ",\n"
+                . "  ou ajoutez manuellement la dépendance :\n"
+                . "  " . self::Y . "composer require nabysyphpapi/xnabysygs" . self::R
+            );
+            exit(1);
+        }
+
+        self::info("Initialisation du projet " . self::B . self::C . $nomProjet . self::R . "...");
+
+        // ── Déduction des valeurs depuis le nom du projet ─────
+        // "mon-projet-api" → vendor: "mon-projet", name: "mon-projet-api"
+        $slug        = strtolower(preg_replace('/[^a-zA-Z0-9\-]/', '-', $nomProjet));
+        $parts       = explode('-', $slug);
+        $vendor      = count($parts) > 1 ? $parts[0] : $slug;
+        $description = ucwords(str_replace('-', ' ', $slug)) . ' — Powered by NAbySyGS';
+        $namespace   = str_replace(' ', '', ucwords(str_replace('-', ' ', $slug))) . '\\';
+
+        $composerContent = json_encode([
+            'name'        => $vendor . '/' . $slug,
+            'description' => $description,
+            'type'        => 'project',
+            'require'     => [
+                'php'                      => '>=8.1',
+                'nabysyphpapi/xnabysygs'   => '*',
+            ],
+            'autoload'    => [
+                'psr-4' => [
+                    $namespace => 'src/',
+                ],
+            ],
+            'config'      => [
+                'optimize-autoloader' => true,
+            ],
+        ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+
+        // ── Écriture du composer.json ─────────────────────────
+        if (file_put_contents($composerJson, $composerContent) === false) {
+            self::error("Impossible de créer composer.json dans : {$cwd}");
+            exit(1);
+        }
+        self::success("composer.json généré :");
+        self::dim("  name        : {$vendor}/{$slug}");
+        self::dim("  description : {$description}");
+        self::dim("  namespace   : {$namespace}");
+        echo PHP_EOL;
+
+        // ── Installation via composer ─────────────────────────
+        self::runComposerRequire($cwd);
+
+        // ── Rappel setup ──────────────────────────────────────
+        echo PHP_EOL;
+        self::info("Prochaine étape : configurez votre projet via " . self::Y . "setup.html" . self::R);
+        self::dim("  Le fichier setup.html se trouve dans vendor/nabysyphpapi/xnabysygs/");
+        self::dim("  Copiez-le à la racine de votre projet et ouvrez-le dans votre navigateur.");
+    }
+
+    // ============================================================
+    //  Exécution de composer require nabysyphpapi/xnabysygs
+    //  Avec sortie en temps réel — fallback si composer absent
+    // ============================================================
+    private static function runComposerRequire(string $projectRoot): void
+    {
+        // Détecter si composer est disponible
+        $composerBin = self::findComposer();
+
+        if ($composerBin === null) {
+            self::error("Composer introuvable sur cette machine.");
+            echo PHP_EOL;
+            self::dim("  Installez Composer depuis : " . self::Y . "https://getcomposer.org/download/" . self::R);
+            self::dim("  Puis lancez manuellement :");
+            echo self::Y . "  composer require nabysyphpapi/xnabysygs" . self::R . PHP_EOL;
+            return;
+        }
+
+        $cmd = $composerBin . ' require nabysyphpapi/xnabysygs --working-dir=' . escapeshellarg(rtrim($projectRoot, DIRECTORY_SEPARATOR));
+        self::dim("  > " . $cmd);
+        echo PHP_EOL;
+
+        // Exécution avec sortie en temps réel via passthru
+        $returnCode = 0;
+        passthru($cmd, $returnCode);
+        echo PHP_EOL;
+
+        if ($returnCode === 0) {
+            self::success("nabysyphpapi/xnabysygs installé avec succès !");
+        } else {
+            self::error("Échec de l'installation (code: {$returnCode}).");
+            echo PHP_EOL;
+            self::dim("  Installez manuellement depuis la racine de votre projet :");
+            echo self::Y . "  composer require nabysyphpapi/xnabysygs" . self::R . PHP_EOL;
+        }
+    }
+
+    // ============================================================
+    //  Détection de composer (global, local, .bat Windows)
+    // ============================================================
+    private static function findComposer(): ?string
+    {
+        $candidates = ['composer', 'composer.phar', 'composer.bat'];
+
+        foreach ($candidates as $bin) {
+            // which / where selon l'OS
+            $check = PHP_OS_FAMILY === 'Windows'
+                ? @shell_exec('where ' . escapeshellarg($bin) . ' 2>nul')
+                : @shell_exec('which ' . escapeshellarg($bin) . ' 2>/dev/null');
+
+            if (!empty(trim((string)$check))) {
+                return $bin;
+            }
+        }
+
+        // Chercher composer.phar dans le dossier courant
+        if (file_exists(getcwd() . DIRECTORY_SEPARATOR . 'composer.phar')) {
+            return 'php ' . escapeshellarg(getcwd() . DIRECTORY_SEPARATOR . 'composer.phar');
+        }
+
+        return null;
+    }
+
+    // ============================================================
     //  Commande : version
     // ============================================================
     private static function cmdVersion(): void
@@ -636,6 +808,10 @@ class NAbySyCLI
   {$g}koro{$r}  <commande> [sous-commande] [arguments] [options]
 
 {$b}Commandes disponibles:{$r}
+
+  {$g}init{$r} {$d}(alias: i){$r} <nom-projet>
+    Initialise un nouveau projet NAbySyGS dans le dossier courant.
+    Génère composer.json et installe nabysyphpapi/xnabysygs automatiquement.
 
   {$g}create{$r} {$d}(alias: c){$r}
     {$y}categorie{$r} {$d}(cat){$r}  <nom> [-a] [-o] [-t <table>]
@@ -674,6 +850,9 @@ class NAbySyCLI
   {$y}--debug{$r}             Afficher les détails d'exécution
 
 {$b}Exemples:{$r}
+  {$c}{$bin} init mon-projet-api{$r}
+  {$c}koro i mon-projet-api{$r}
+
   {$c}{$bin} create categorie client -a -o -t clients{$r}
   {$c}{$bin} c cat client -a -o -t clients{$r}
   {$c}koro c cat client -a -o -t clients{$r}
