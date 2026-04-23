@@ -1,6 +1,6 @@
 {
     "name": "nabysyphpapi/xnabysygs-cli",
-    "description": "CLI globale du framework NAbySyGS — commandes nsy et koro",
+    "description": "CLI globale du framework NAbySyPhp Rapid Api Générator  — commandes nsy et koro",
     "type": "project",
     "license": "MIT",
     "authors": [
