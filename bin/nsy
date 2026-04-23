@@ -1,0 +1,45 @@
+#!/usr/bin/env php
+<?php
+// ============================================================
+//  NAbySyGS CLI — Point d'entrée : nsy
+//  Installé via : composer global require nabysyphpapi/xnabysygs-cli
+// ============================================================
+
+// Charger l'autoload global de Composer
+$autoloadPaths = [
+    // Installation globale (composer global require)
+    getenv('COMPOSER_HOME') . '/vendor/autoload.php',
+    getenv('HOME')          . '/.config/composer/vendor/autoload.php',
+    getenv('HOME')          . '/.composer/vendor/autoload.php',
+    // Fallback Windows
+    getenv('APPDATA')       . '/Composer/vendor/autoload.php',
+    // Fallback local (développement du package lui-même)
+    __DIR__ . '/../vendor/autoload.php',
+];
+
+$loaded = false;
+foreach ($autoloadPaths as $path) {
+    if ($path && file_exists($path)) {
+        require_once $path;
+        $loaded = true;
+        break;
+    }
+}
+
+if (!$loaded) {
+    fwrite(STDERR,
+        "\033[31m  ✘  Impossible de trouver l'autoload Composer global.\033[0m\n"
+        . "     Essayez : composer global dump-autoload\n"
+    );
+    exit(1);
+}
+
+if (!class_exists('NAbySyCLI')) {
+    fwrite(STDERR,
+        "\033[31m  ✘  Classe NAbySyCLI introuvable.\033[0m\n"
+        . "     Essayez : composer global dump-autoload\n"
+    );
+    exit(1);
+}
+
+NAbySyCLI::run($argv);
