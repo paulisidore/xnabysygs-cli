@@ -33,7 +33,7 @@ class NAbySyCLI
     private const B  = "\033[1m";
     private const D  = "\033[2m";
 
-    private const VERSION = '1.3.5';
+    private const VERSION = '1.3.6';
 
     // Nom par défaut du fichier de structure généré
     private const DEFAULT_STRUCT_FILE = 'db_structure.php';
@@ -622,6 +622,27 @@ class NAbySyCLI
     }
 
     // ============================================================
+    //  Injection de allow-plugins dans un composer.json existant
+    //  Évite le prompt interactif de composer lors du require
+    // ============================================================
+    private static function ensureAllowPlugins(string $composerJson, array $composer): void
+    {
+        $plugins = $composer['config']['allow-plugins'] ?? [];
+
+        // Déjà présent
+        if (isset($plugins['nabysyphpapi/xnabysygs'])) return;
+
+        $composer['config']['allow-plugins']['nabysyphpapi/xnabysygs'] = true;
+
+        $updated = json_encode($composer, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        if (file_put_contents($composerJson, $updated) !== false) {
+            self::dim("  → allow-plugins ajouté dans composer.json");
+        } else {
+            self::error("Impossible de modifier composer.json pour allow-plugins.");
+        }
+    }
+
+    // ============================================================
     //  Détection et installation automatique de nabysyphpapi/xnabysygs
     // ============================================================
     private static function checkAndInstallFramework(): void
@@ -640,8 +661,12 @@ class NAbySyCLI
         // Framework déjà présent dans composer.json
         if (isset($require['nabysyphpapi/xnabysygs'])) return;
 
-        // Framework absent → installation automatique
+        // Framework absent → s'assurer que allow-plugins est défini avant le require
         self::info("nabysyphpapi/xnabysygs non détecté dans ce projet.");
+
+        // Injecter allow-plugins si absent pour éviter le prompt interactif de composer
+        self::ensureAllowPlugins($composerJson, $composer);
+
         self::info("Installation automatique en cours...");
         echo PHP_EOL;
 
@@ -688,8 +713,8 @@ class NAbySyCLI
             'description' => $description,
             'type'        => 'project',
             'require'     => [
-                'php'                      => '>=8.1',
-                'nabysyphpapi/xnabysygs'   => '*',
+                'php'                    => '>=8.1',
+                'nabysyphpapi/xnabysygs' => '*',
             ],
             'autoload'    => [
                 'psr-4' => [
@@ -698,6 +723,9 @@ class NAbySyCLI
             ],
             'config'      => [
                 'optimize-autoloader' => true,
+                'allow-plugins'       => [
+                    'nabysyphpapi/xnabysygs' => true,
+                ],
             ],
         ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
 
