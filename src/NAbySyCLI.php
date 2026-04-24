@@ -33,7 +33,7 @@ class NAbySyCLI
     private const B  = "\033[1m";
     private const D  = "\033[2m";
 
-    private const VERSION = '1.3.1';
+    private const VERSION = '1.3.7';
 
     // Nom par défaut du fichier de structure généré
     private const DEFAULT_STRUCT_FILE = 'db_structure.php';
