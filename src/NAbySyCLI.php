@@ -33,7 +33,7 @@ class NAbySyCLI
     private const B  = "\033[1m";
     private const D  = "\033[2m";
 
-    private const VERSION = '1.3.7';
+    private const VERSION = '1.3.8';
 
     // Nom par défaut du fichier de structure généré
     private const DEFAULT_STRUCT_FILE = 'db_structure.php';
@@ -104,7 +104,9 @@ class NAbySyCLI
         // ── Détection du framework NAbySyGS dans le projet ──
         // On vérifie uniquement pour les commandes qui en ont besoin
         if (!in_array($cmd, ['help', 'version', 'init'])) {
-            self::checkAndInstallFramework();
+            if (!self::checkAndInstallFramework()) {
+                exit(0); // Setup requis — commande suspendue proprement
+            }
         }
 
         match ($cmd) {
@@ -198,10 +200,9 @@ class NAbySyCLI
         self::dim("  Incluez ce fichier dans appinfos.php si ce n'est pas encore fait :");
         self::dim('  include_once __DIR__ . "/' . self::DEFAULT_STRUCT_FILE . '";');
 
-        self::cmdDbUpdate();
+        self::cmdDbUpdate($nom);
     }
 
-    // ── create action ───────────────────────────────────────
     private static function createAction(array $args, array $opts): void
     {
         $nom = $args[0] ?? '';
@@ -218,7 +219,7 @@ class NAbySyCLI
 
         self::success("Action " . self::B . $nom . self::R . self::G . " enregistrée dans " . self::$structFile);
 
-        self::cmdDbUpdate();
+        self::cmdDbUpdate($nom);
     }
 
     // ── create orm ──────────────────────────────────────────
@@ -246,7 +247,7 @@ class NAbySyCLI
 
         self::success("ORM " . self::B . $nom . self::R . self::G . " enregistré dans " . self::$structFile);
 
-        self::cmdDbUpdate();
+        self::cmdDbUpdate($nom);
     }
 
     // ── create route ────────────────────────────────────────
@@ -272,7 +273,7 @@ class NAbySyCLI
 
         self::success("Route " . self::B . $nom . self::R . self::G . " enregistrée dans " . self::$structFile);
 
-        self::cmdDbUpdate();
+        self::cmdDbUpdate($nom);
     }
 
     // ============================================================
@@ -294,8 +295,10 @@ class NAbySyCLI
 
     // ============================================================
     //  Commande : db update
+    //  $contexte : nom du module en cours de création si appelé
+    //              depuis un create, vide si appel manuel
     // ============================================================
-    private static function cmdDbUpdate(): void
+    private static function cmdDbUpdate(string $contexte = ''): void
     {
         self::info("Mise à jour de la structure via l'API...");
 
@@ -319,8 +322,6 @@ class NAbySyCLI
         if ($json === null) return;
 
         // ── Détection du premier setup ────────────────────────
-        // Le framework signale via Extra = "NABYSY_STRUCURE_INITIAL_SETUP"
-        // qu'un second appel est nécessaire pour terminer la configuration.
         if (isset($json->Extra) && $json->Extra === 'NABYSY_STRUCURE_INITIAL_SETUP') {
             self::dim("  " . ($json->Contenue ?? "Configuration initiale détectée."));
             self::info("Second appel en cours pour finaliser la configuration...");
@@ -329,7 +330,23 @@ class NAbySyCLI
             $json2 = self::callStructureUpdate($actionUrl);
             if ($json2 === null) return;
 
-            self::interpretStructureResponse($json2);
+            // ── Avertissement si appelé depuis un create ──────
+            // Le module est dans db_structure.php mais pas encore
+            // généré physiquement car le framework venait de s'initialiser.
+            if (!empty($contexte)) {
+                echo PHP_EOL;
+                echo self::Y . self::B . "  ⚠  Initialisation du framework détectée" . self::R . PHP_EOL;
+                self::dim("  Le framework NAbySyGS vient d'être configuré pour la première fois.");
+                self::dim("  Le module " . self::B . self::C . $contexte . self::R . self::D
+                    . " est enregistré dans db_structure.php");
+                self::dim("  mais n'est pas encore généré physiquement.");
+                echo PHP_EOL;
+                self::info("Relancez la commande suivante pour finaliser la génération :");
+                echo self::Y . "  koro db update" . self::R . PHP_EOL;
+                echo PHP_EOL;
+            } else {
+                self::interpretStructureResponse($json2);
+            }
         } else {
             self::interpretStructureResponse($json);
         }
@@ -675,33 +692,72 @@ class NAbySyCLI
 
     // ============================================================
     //  Détection et installation automatique de nabysyphpapi/xnabysygs
+    //  Retourne true si le framework est prêt, false s'il vient
+    //  d'être installé et nécessite le setup avant de continuer.
     // ============================================================
-    private static function checkAndInstallFramework(): void
+    private static function checkAndInstallFramework(): bool
     {
-        if (empty(self::$root)) return;
+        if (empty(self::$root)) return true;
 
         $composerJson = self::$root . 'composer.json';
-        if (!file_exists($composerJson)) return;
+        if (!file_exists($composerJson)) return true;
 
         $composer = json_decode(file_get_contents($composerJson), true);
         $require  = array_merge(
-            $composer['require']         ?? [],
-            $composer['require-dev']     ?? []
+            $composer['require']     ?? [],
+            $composer['require-dev'] ?? []
         );
 
-        // Framework déjà présent dans composer.json
-        if (isset($require['nabysyphpapi/xnabysygs'])) return;
+        // Framework déjà présent
+        if (isset($require['nabysyphpapi/xnabysygs'])) return true;
 
-        // Framework absent → s'assurer que allow-plugins est défini avant le require
+        // ── Framework absent → installation ───────────────────
         self::info("nabysyphpapi/xnabysygs non détecté dans ce projet.");
-
-        // Injecter allow-plugins si absent pour éviter le prompt interactif de composer
         self::ensureAllowPlugins($composerJson, $composer);
-
         self::info("Installation automatique en cours...");
         echo PHP_EOL;
 
         self::runComposerRequire(self::$root);
+
+        // ── Ouverture automatique de setup.html ───────────────
+        $setupHtml = self::$root . 'vendor' . DIRECTORY_SEPARATOR
+            . 'nabysyphpapi' . DIRECTORY_SEPARATOR
+            . 'xnabysygs' . DIRECTORY_SEPARATOR
+            . 'setup.html';
+
+        // Copier setup.html à la racine du projet si pas encore fait
+        $setupDest = self::$root . 'setup.html';
+        if (file_exists($setupHtml) && !file_exists($setupDest)) {
+            copy($setupHtml, $setupDest);
+            self::dim("  → setup.html copié à la racine du projet");
+        }
+
+        // Ouvrir dans le navigateur par défaut selon l'OS
+        if (file_exists($setupDest)) {
+            $setupUrl = 'file:///' . str_replace('\\', '/', $setupDest);
+            self::dim("  → Ouverture de setup.html...");
+            match (PHP_OS_FAMILY) {
+                'Windows' => @shell_exec('start "" ' . escapeshellarg($setupDest)),
+                'Darwin'  => @shell_exec('open '     . escapeshellarg($setupDest)),
+                default   => @shell_exec('xdg-open ' . escapeshellarg($setupDest)),
+            };
+        }
+
+        // ── Notification et arrêt de la commande en cours ────
+        echo PHP_EOL;
+        echo self::Y . self::B . "  ⚠  Configuration requise" . self::R . PHP_EOL;
+        self::dim("  Le framework NAbySyGS vient d'être installé.");
+        self::dim("  setup.html s'est ouvert dans votre navigateur.");
+        self::dim("  Complétez la configuration puis relancez votre commande.");
+        echo PHP_EOL;
+
+        // Rappel de la commande à resaisir
+        $bin = 'koro';
+        echo self::G . "  Votre commande à relancer après le setup :" . self::R . PHP_EOL;
+        echo self::C . "  " . $bin . " " . implode(' ', array_slice($_SERVER['argv'] ?? [], 1)) . self::R . PHP_EOL;
+        echo PHP_EOL;
+
+        return false; // Stopper la commande en cours
     }
 
     // ============================================================
