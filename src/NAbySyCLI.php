@@ -33,7 +33,7 @@ class NAbySyCLI
     private const B  = "\033[1m";
     private const D  = "\033[2m";
 
-    private const VERSION = '1.3.6';
+    private const VERSION = '1.3.0';
 
     // Nom par défaut du fichier de structure généré
     private const DEFAULT_STRUCT_FILE = 'db_structure.php';
@@ -315,11 +315,34 @@ class NAbySyCLI
         $actionUrl = $url . '/?Action=NABYSY_STRUCURE_UPDATE';
         self::dim("  → GET " . $actionUrl);
 
+        $json = self::callStructureUpdate($actionUrl);
+        if ($json === null) return;
+
+        // ── Détection du premier setup ────────────────────────
+        // Le framework signale via Extra = "NABYSY_STRUCURE_INITIAL_SETUP"
+        // qu'un second appel est nécessaire pour terminer la configuration.
+        if (isset($json->Extra) && $json->Extra === 'NABYSY_STRUCURE_INITIAL_SETUP') {
+            self::dim("  " . ($json->Contenue ?? "Configuration initiale détectée."));
+            self::info("Second appel en cours pour finaliser la configuration...");
+            self::dim("  → GET " . $actionUrl);
+
+            $json2 = self::callStructureUpdate($actionUrl);
+            if ($json2 === null) return;
+
+            self::interpretStructureResponse($json2);
+        } else {
+            self::interpretStructureResponse($json);
+        }
+    }
+
+    // ── Appel HTTP et décodage JSON ──────────────────────────
+    private static function callStructureUpdate(string $actionUrl): ?object
+    {
         $response = self::httpGet($actionUrl);
 
         if ($response === null) {
             self::error("Impossible de joindre l'API : " . $actionUrl);
-            return;
+            return null;
         }
 
         if (self::$debug) {
@@ -327,14 +350,22 @@ class NAbySyCLI
         }
 
         $json = json_decode($response);
-
         if ($json === null) {
             self::error("Réponse invalide (non JSON) :\n  " . substr($response, 0, 200));
-            return;
+            return null;
         }
 
+        return $json;
+    }
+
+    // ── Interprétation de la réponse finale ──────────────────
+    private static function interpretStructureResponse(object $json): void
+    {
         if (isset($json->OK) && $json->OK == 1) {
             self::success("Structure mise à jour avec succès !");
+            if (self::$debug && isset($json->Contenue)) {
+                self::dim("  " . $json->Contenue);
+            }
         } else {
             $txErreur = $json->TxErreur ?? 'Erreur inconnue';
             self::error("Échec de la mise à jour : " . $txErreur);
