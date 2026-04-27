@@ -49,6 +49,8 @@ koro create action    <nom>
 koro create orm       <nom> <table> [dossier]
 koro create route     <nom> [dossier]
 koro db update
+koro update
+koro update cli
 koro version
 koro help
 ```
@@ -194,6 +196,32 @@ koro db update --url http://kssv5/api/shop
 
 ---
 
+### `koro update` — Mettre à jour le framework
+
+Met à jour le package **nabysyphpapi/xnabysygs** via Composer global.
+
+```bash
+koro update
+# équivalent à :
+composer global update nabysyphpapi/xnabysygs
+```
+
+---
+
+### `koro update cli` — Mettre à jour la CLI
+
+Met à jour le package **nabysyphpapi/xnabysygs-cli** via Composer global.
+
+```bash
+koro update cli
+# équivalent à :
+composer global update nabysyphpapi/xnabysygs-cli
+```
+
+> Ces deux commandes s'exécutent sans nécessiter d'être dans un projet NAbySyGS.
+
+---
+
 ### `koro version`
 
 ```bash
@@ -265,6 +293,10 @@ koro create categorie commande -a -o -t commandes --struct structure/commerce.ph
 # Synchronisation manuelle de la base
 koro db update
 koro db update --url http://kssv5/api/shop
+
+# Mise à jour
+koro update          # met à jour le framework
+koro update cli      # met à jour la CLI
 
 # Debug activé
 koro create orm xProduit produits --debug

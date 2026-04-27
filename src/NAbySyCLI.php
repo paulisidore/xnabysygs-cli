@@ -12,6 +12,8 @@
 //    create orm       <nom> <table> [dossier]        (alias: c o)
 //    create route     <nom> [dossier]                (alias: c r)
 //    db update                                       (alias: db u)
+//    update                                          → composer global update nabysyphpapi/xnabysygs
+//    update cli                                      → composer global update nabysyphpapi/xnabysygs-cli
 //    version                                         (alias: v)
 //    help                                            (alias: h)
 //
@@ -129,7 +131,7 @@ class NAbySyCLI
 
         // ── Détection du framework NAbySyGS dans le projet ──
         // On vérifie uniquement pour les commandes qui en ont besoin
-        if (!in_array($cmd, ['help', 'version', 'init'])) {
+        if (!in_array($cmd, ['help', 'version', 'init', 'update'])) {
             if (!self::checkAndInstallFramework()) {
                 exit(0); // Setup requis — commande suspendue proprement
             }
@@ -139,6 +141,7 @@ class NAbySyCLI
             'create'  => self::cmdCreate(array_slice($args, 1), $opts),
             'db'      => self::cmdDb(array_slice($args, 1), $opts),
             'init'    => self::cmdInit(array_slice($args, 1), $opts),
+            'update'  => self::cmdUpdate(array_slice($args, 1)),
             'version' => self::cmdVersion(),
             'help'    => self::cmdHelp($bin),
             default   => self::cmdUnknown($cmd, $bin),
@@ -999,6 +1002,32 @@ class NAbySyCLI
     }
 
     // ============================================================
+    //  Commande : update [cli]
+    // ============================================================
+    private static function cmdUpdate(array $args): void
+    {
+        $sub = strtolower($args[0] ?? '');
+
+        if ($sub === 'cli') {
+            self::info("Mise à jour de la CLI NAbySyGS...");
+            $cmd = 'composer global update nabysyphpapi/xnabysygs-cli';
+        } else {
+            self::info("Mise à jour du framework NAbySyGS...");
+            $cmd = 'composer global update nabysyphpapi/xnabysygs';
+        }
+
+        self::dim("  → {$cmd}");
+        passthru($cmd, $exitCode);
+
+        if ($exitCode === 0) {
+            self::success($sub === 'cli' ? "CLI mise à jour avec succès." : "Framework mis à jour avec succès.");
+        } else {
+            self::error("La mise à jour a échoué (code {$exitCode}).");
+            exit($exitCode);
+        }
+    }
+
+    // ============================================================
     //  Commande : version
     // ============================================================
     private static function cmdVersion(): void
@@ -1052,6 +1081,14 @@ class NAbySyCLI
         L'URL est lue depuis __SERVER_URL__ dans appinfos.php.
         Appelé automatiquement après chaque commande create.
 
+  {$g}update{$r}
+    Met à jour le framework NAbySyGS via Composer global.
+    {$d}composer global update nabysyphpapi/xnabysygs{$r}
+
+  {$g}update cli{$r}
+    Met à jour la CLI NAbySyGS via Composer global.
+    {$d}composer global update nabysyphpapi/xnabysygs-cli{$r}
+
   {$g}version{$r} {$d}(v){$r}
     Affiche la version du CLI.
 
@@ -1087,6 +1124,12 @@ class NAbySyCLI
   {$c}{$bin} db update{$r}
   {$c}{$bin} db update --url http://kssv5/api/shop{$r}
   {$c}koro db u{$r}
+
+  {$c}{$bin} update{$r}
+  {$c}koro update{$r}
+
+  {$c}{$bin} update cli{$r}
+  {$c}koro update cli{$r}
 
 HELP;
     }
