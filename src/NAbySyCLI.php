@@ -33,7 +33,7 @@ class NAbySyCLI
     private const B  = "\033[1m";
     private const D  = "\033[2m";
 
-    private const VERSION = '1.3.8';
+    private const VERSION = '1.4.0';
 
     // Nom par défaut du fichier de structure généré
     private const DEFAULT_STRUCT_FILE = 'db_structure.php';
@@ -691,6 +691,28 @@ class NAbySyCLI
     }
 
     // ============================================================
+    //  Injection du classmap bootstrap.php dans composer.json
+    //  Permet aux IDE (VSCode, PHPStorm) de résoudre la classe N
+    // ============================================================
+    private static function ensureClassmap(string $composerJson, array $composer): void
+    {
+        $classmap = $composer['autoload']['classmap'] ?? [];
+        $entry    = 'vendor/nabysyphpapi/xnabysygs/src/bootstrap.php';
+
+        // Déjà présent
+        if (in_array($entry, $classmap, true)) return;
+
+        $composer['autoload']['classmap'][] = $entry;
+
+        $updated = json_encode($composer, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        if (file_put_contents($composerJson, $updated) !== false) {
+            self::dim("  → classmap bootstrap.php ajouté dans composer.json");
+        } else {
+            self::error("Impossible de modifier composer.json pour le classmap.");
+        }
+    }
+
+    // ============================================================
     //  Détection et installation automatique de nabysyphpapi/xnabysygs
     //  Retourne true si le framework est prêt, false s'il vient
     //  d'être installé et nécessite le setup avant de continuer.
@@ -714,6 +736,9 @@ class NAbySyCLI
         // ── Framework absent → installation ───────────────────
         self::info("nabysyphpapi/xnabysygs non détecté dans ce projet.");
         self::ensureAllowPlugins($composerJson, $composer);
+        // Relire après modification pour ne pas écraser allow-plugins
+        $composer = json_decode(file_get_contents($composerJson), true);
+        self::ensureClassmap($composerJson, $composer);
         self::info("Installation automatique en cours...");
         echo PHP_EOL;
 
@@ -804,8 +829,11 @@ class NAbySyCLI
                 'nabysyphpapi/xnabysygs' => '*',
             ],
             'autoload'    => [
-                'psr-4' => [
+                'psr-4'    => [
                     $namespace => 'src/',
+                ],
+                'classmap' => [
+                    'vendor/nabysyphpapi/xnabysygs/src/bootstrap.php',
                 ],
             ],
             'config'      => [
