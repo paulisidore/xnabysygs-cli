@@ -33,7 +33,33 @@ class NAbySyCLI
     private const B  = "\033[1m";
     private const D  = "\033[2m";
 
-    private const VERSION = '1.4.1';
+    private const VERSION = '1.4.2'; // Fallback si composer.json illisible
+
+    // ── Lecture dynamique de la version depuis composer.json ─
+    private static function getVersion(): string
+    {
+        // Chercher le composer.json du package CLI lui-même
+        $composerJson = __DIR__ . DIRECTORY_SEPARATOR . '..' . DIRECTORY_SEPARATOR . 'composer.json';
+        if (file_exists($composerJson)) {
+            $data = json_decode(file_get_contents($composerJson), true);
+            if (!empty($data['version'])) return $data['version'];
+        }
+
+        // Fallback : lire depuis le composer.lock du projet hôte
+        if (!empty(self::$root)) {
+            $lockFile = self::$root . 'composer.lock';
+            if (file_exists($lockFile)) {
+                $lock = json_decode(file_get_contents($lockFile), true);
+                foreach ($lock['packages'] ?? [] as $pkg) {
+                    if ($pkg['name'] === 'nabysyphpapi/xnabysygs-cli') {
+                        return ltrim($pkg['version'], 'v');
+                    }
+                }
+            }
+        }
+
+        return self::VERSION; // Dernier recours
+    }
 
     // Nom par défaut du fichier de structure généré
     private const DEFAULT_STRUCT_FILE = 'db_structure.php';
@@ -490,7 +516,7 @@ class NAbySyCLI
         $header = '<?php' . PHP_EOL
             . '// ============================================================' . PHP_EOL
             . '//  NAbySyGS — Fichier de structure des modules' . PHP_EOL
-            . '//  Généré par : nsy CLI v' . self::VERSION . PHP_EOL
+            . '//  Généré par : nsy CLI v' . self::getVersion() . PHP_EOL
             . '//' . PHP_EOL
             . '//  Ce fichier est automatiquement inclus dans appinfos.php.' . PHP_EOL
             . '//  Il contient les appels de génération des catégories,' . PHP_EOL
@@ -963,7 +989,7 @@ class NAbySyCLI
     private static function cmdVersion(): void
     {
         echo self::G . self::B . "NAbySyGS CLI" . self::R
-            . " version " . self::Y . self::VERSION . self::R
+            . " version " . self::Y . self::getVersion() . self::R
             . " 🦅 Koro\n";
     }
 
