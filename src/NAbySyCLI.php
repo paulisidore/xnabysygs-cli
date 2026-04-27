@@ -14,6 +14,7 @@
 //    db update                                       (alias: db u)
 //    update                                          → composer global update nabysyphpapi/xnabysygs
 //    update cli                                      → composer global update nabysyphpapi/xnabysygs-cli
+//    doc                                             (alias: d) Ouvre api/describe?HTML=1 dans le navigateur
 //    version                                         (alias: v)
 //    help                                            (alias: h)
 //
@@ -72,6 +73,7 @@ class NAbySyCLI
         'h'   => 'help',
         'v'   => 'version',
         'i'   => 'init',
+        'd'   => 'doc',
         // sous-commandes create
         'cat' => 'categorie',
         'a'   => 'action',
@@ -131,7 +133,7 @@ class NAbySyCLI
 
         // ── Détection du framework NAbySyGS dans le projet ──
         // On vérifie uniquement pour les commandes qui en ont besoin
-        if (!in_array($cmd, ['help', 'version', 'init', 'update'])) {
+        if (!in_array($cmd, ['help', 'version', 'init', 'update', 'doc'])) {
             if (!self::checkAndInstallFramework()) {
                 exit(0); // Setup requis — commande suspendue proprement
             }
@@ -142,6 +144,7 @@ class NAbySyCLI
             'db'      => self::cmdDb(array_slice($args, 1), $opts),
             'init'    => self::cmdInit(array_slice($args, 1), $opts),
             'update'  => self::cmdUpdate(array_slice($args, 1)),
+            'doc'     => self::cmdDoc(),
             'version' => self::cmdVersion(),
             'help'    => self::cmdHelp($bin),
             default   => self::cmdUnknown($cmd, $bin),
@@ -1028,6 +1031,39 @@ class NAbySyCLI
     }
 
     // ============================================================
+    //  Commande : doc
+    // ============================================================
+    private static function cmdDoc(): void
+    {
+        $base = !empty(self::$apiUrl)
+            ? self::$apiUrl
+            : self::resolveApiUrl();
+
+        if (empty($base)) {
+            self::error(
+                "URL de l'API introuvable.\n"
+                . "  Solutions :\n"
+                . "  • Ajoutez " . self::Y . "__SERVER_URL__" . self::R2
+                . " dans appinfos.php (généré par setup.html)\n"
+                . "  • Ou passez " . self::Y . "--url http://votre-api.com" . self::R2
+                . " à la commande"
+            );
+            exit(1);
+        }
+
+        $url = rtrim($base, '/') . '/api/describe?HTML=1';
+        self::info("Ouverture de la documentation : " . self::C . $url . self::R);
+
+        if (PHP_OS_FAMILY === 'Windows') {
+            pclose(popen('start "" "' . $url . '"', 'r'));
+        } elseif (PHP_OS_FAMILY === 'Darwin') {
+            exec('open ' . escapeshellarg($url));
+        } else {
+            exec('xdg-open ' . escapeshellarg($url));
+        }
+    }
+
+    // ============================================================
     //  Commande : version
     // ============================================================
     private static function cmdVersion(): void
@@ -1089,6 +1125,11 @@ class NAbySyCLI
     Met à jour la CLI NAbySyGS via Composer global.
     {$d}composer global update nabysyphpapi/xnabysygs-cli{$r}
 
+  {$g}doc{$r} {$d}(alias: d){$r}
+    Ouvre la documentation des routes dans le navigateur ({$d}api/describe?HTML=1{$r}).
+    L'URL est construite depuis {$y}__SERVER_URL__{$r} (+ {$y}__BASEDIR__{$r} si défini) dans appinfos.php.
+    Surchargeable avec {$y}--url{$r}.
+
   {$g}version{$r} {$d}(v){$r}
     Affiche la version du CLI.
 
@@ -1130,6 +1171,9 @@ class NAbySyCLI
 
   {$c}{$bin} update cli{$r}
   {$c}koro update cli{$r}
+
+  {$c}{$bin} doc{$r}
+  {$c}koro doc --url http://monapi.local{$r}
 
 HELP;
     }

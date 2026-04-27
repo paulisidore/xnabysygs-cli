@@ -51,6 +51,7 @@ koro create route     <nom> [dossier]
 koro db update
 koro update
 koro update cli
+koro doc
 koro version
 koro help
 ```
@@ -222,6 +223,27 @@ composer global update nabysyphpapi/xnabysygs-cli
 
 ---
 
+### `koro doc` — Ouvrir la documentation des routes
+
+Ouvre `api/describe?HTML=1` dans le navigateur par défaut. L'URL est construite depuis `__SERVER_URL__` dans `appinfos.php`, avec `__BASEDIR__` ajouté s'il est défini.
+
+```bash
+koro doc
+# alias
+koro d
+```
+
+Vous pouvez surcharger l'URL de base avec `--url` :
+
+```bash
+koro doc --url http://monapi.local
+# ouvrira : http://monapi.local/api/describe?HTML=1
+```
+
+> Cette commande s'exécute sans nécessiter d'être dans un projet NAbySyGS si `--url` est fourni.
+
+---
+
 ### `koro version`
 
 ```bash
@@ -297,6 +319,10 @@ koro db update --url http://kssv5/api/shop
 # Mise à jour
 koro update          # met à jour le framework
 koro update cli      # met à jour la CLI
+
+# Documentation des routes
+koro doc
+koro doc --url http://monapi.local
 
 # Debug activé
 koro create orm xProduit produits --debug
