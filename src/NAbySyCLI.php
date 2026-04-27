@@ -743,6 +743,7 @@ class NAbySyCLI
         echo PHP_EOL;
 
         self::runComposerRequire(self::$root);
+        self::runComposerDumpAutoload(self::$root);
 
         // ── Ouverture automatique de setup.html ───────────────
         $setupHtml = self::$root . 'vendor' . DIRECTORY_SEPARATOR
@@ -857,6 +858,7 @@ class NAbySyCLI
 
         // ── Installation via composer ─────────────────────────
         self::runComposerRequire($cwd);
+        self::runComposerDumpAutoload($cwd);
 
         // ── Rappel setup ──────────────────────────────────────
         echo PHP_EOL;
@@ -899,6 +901,33 @@ class NAbySyCLI
             echo PHP_EOL;
             self::dim("  Installez manuellement depuis la racine de votre projet :");
             echo self::Y . "  composer require nabysyphpapi/xnabysygs" . self::R . PHP_EOL;
+        }
+    }
+
+    // ============================================================
+    //  Exécution de composer dump-autoload
+    //  Appelé automatiquement après chaque require pour régénérer
+    //  le classmap et permettre aux IDE de résoudre la classe N
+    // ============================================================
+    private static function runComposerDumpAutoload(string $projectRoot): void
+    {
+        $composerBin = self::findComposer();
+        if ($composerBin === null) return;
+
+        $cmd = $composerBin . ' dump-autoload --optimize --working-dir='
+            . escapeshellarg(rtrim($projectRoot, DIRECTORY_SEPARATOR));
+
+        self::info("Mise à jour de l'autoload...");
+        self::dim("  > " . $cmd);
+
+        $returnCode = 0;
+        passthru($cmd, $returnCode);
+
+        if ($returnCode === 0) {
+            self::success("Autoload régénéré — la classe N est maintenant reconnue par votre IDE.");
+        } else {
+            self::error("Échec du dump-autoload (code: {$returnCode}).");
+            self::dim("  Lancez manuellement : " . self::Y . "composer dump-autoload --optimize" . self::R);
         }
     }
 
