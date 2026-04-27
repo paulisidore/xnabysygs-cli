@@ -630,21 +630,36 @@ class NAbySyCLI
         }
 
         // Priorité 2 : lire __SERVER_URL__ et __BASEDIR__ via regex dans appinfos.php
-        if (empty(self::$root)) return null;
+        if (empty(self::$root)) {
+            if (self::$debug) self::dim("  [debug] resolveApiUrl : root vide, pas de projet détecté");
+            return null;
+        }
 
         $appinfos = self::$root . 'appinfos.php';
-        if (!file_exists($appinfos)) return null;
+        if (!file_exists($appinfos)) {
+            if (self::$debug) self::dim("  [debug] resolveApiUrl : appinfos.php introuvable dans {$appinfos}");
+            return null;
+        }
 
         $content = file_get_contents($appinfos);
-        if ($content === false) return null;
+        if ($content === false) {
+            if (self::$debug) self::dim("  [debug] resolveApiUrl : impossible de lire {$appinfos}");
+            return null;
+        }
 
+        // Supporte : const __SERVER_URL__ = '...' ET define('__SERVER_URL__', '...')
         $serverUrl = null;
         if (preg_match("/const\s+__SERVER_URL__\s*=\s*'([^']*)'/", $content, $m) ||
-            preg_match('/const\s+__SERVER_URL__\s*=\s*"([^"]*)"/', $content, $m)) {
+            preg_match('/const\s+__SERVER_URL__\s*=\s*"([^"]*)"/', $content, $m) ||
+            preg_match("/define\s*\(\s*['\"]__SERVER_URL__['\"]\s*,\s*'([^']*)'\s*\)/", $content, $m) ||
+            preg_match("/define\s*\(\s*['\"]__SERVER_URL__['\"]\s*,\s*\"([^\"]*)\"\s*\)/", $content, $m)) {
             $serverUrl = rtrim($m[1], '/');
         }
 
-        if (empty($serverUrl)) return null;
+        if (empty($serverUrl)) {
+            if (self::$debug) self::dim("  [debug] resolveApiUrl : __SERVER_URL__ absent ou vide dans {$appinfos}");
+            return null;
+        }
 
         $baseDir = '';
         if (preg_match("/define\s*\(\s*'__BASEDIR__'\s*,\s*\"([^\"]*)\"\s*\)/", $content, $m) ||
