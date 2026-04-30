@@ -36,19 +36,30 @@ class NAbySyCLI
     private const B  = "\033[1m";
     private const D  = "\033[2m";
 
-    private const VERSION = '1.4.2'; // Fallback si composer.json illisible
+    private const VERSION = '1.4.6'; // Fallback si composer.json illisible
 
     // ── Lecture dynamique de la version depuis composer.json ─
     private static function getVersion(): string
     {
-        // Chercher le composer.json du package CLI lui-même
+        // Priorité 1 : composer.json du package CLI (si version hardcodée — dev local)
         $composerJson = __DIR__ . DIRECTORY_SEPARATOR . '..' . DIRECTORY_SEPARATOR . 'composer.json';
         if (file_exists($composerJson)) {
             $data = json_decode(file_get_contents($composerJson), true);
             if (!empty($data['version'])) return $data['version'];
         }
 
-        // Fallback : lire depuis le composer.lock du projet hôte
+        // Priorité 2 : composer.lock global (~/.composer/vendor ou %APPDATA%\Composer)
+        $globalLock = self::findGlobalComposerLock();
+        if ($globalLock !== null) {
+            $lock = json_decode(file_get_contents($globalLock), true);
+            foreach ($lock['packages'] ?? [] as $pkg) {
+                if ($pkg['name'] === 'nabysyphpapi/xnabysygs-cli') {
+                    return ltrim($pkg['version'], 'v');
+                }
+            }
+        }
+
+        // Priorité 3 : composer.lock du projet hôte (installation locale)
         if (!empty(self::$root)) {
             $lockFile = self::$root . 'composer.lock';
             if (file_exists($lockFile)) {
@@ -62,6 +73,37 @@ class NAbySyCLI
         }
 
         return self::VERSION; // Dernier recours
+    }
+
+    // ── Localisation du composer.lock global ─────────────────
+    private static function findGlobalComposerLock(): ?string
+    {
+        // Chemins standards selon l'OS
+        $candidates = [];
+
+        if (PHP_OS_FAMILY === 'Windows') {
+            $appdata = getenv('APPDATA');
+            if ($appdata) $candidates[] = $appdata . DIRECTORY_SEPARATOR . 'Composer' . DIRECTORY_SEPARATOR . 'composer.lock';
+        } else {
+            $home = getenv('HOME');
+            if ($home) {
+                $candidates[] = $home . '/.config/composer/composer.lock';
+                $candidates[] = $home . '/.composer/composer.lock';
+            }
+        }
+
+        // Fallback : déduire depuis __DIR__ (on remonte jusqu'au dossier global de composer)
+        // __DIR__ = ~/.composer/vendor/nabysyphpapi/xnabysygs-cli/src
+        $fromDir = realpath(__DIR__ . '/../../../../..'); // remonte jusqu'à ~/.composer
+        if ($fromDir && file_exists($fromDir . DIRECTORY_SEPARATOR . 'composer.lock')) {
+            $candidates[] = $fromDir . DIRECTORY_SEPARATOR . 'composer.lock';
+        }
+
+        foreach ($candidates as $path) {
+            if (file_exists($path)) return $path;
+        }
+
+        return null;
     }
 
     // Nom par défaut du fichier de structure généré
