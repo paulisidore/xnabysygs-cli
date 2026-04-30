@@ -12,7 +12,7 @@
 //    create orm       <nom> <table> [dossier]        (alias: c o)
 //    create route     <nom> [dossier]                (alias: c r)
 //    db update                                       (alias: db u)
-//    update                                          → composer global update nabysyphpapi/xnabysygs
+//    update                                          → composer update nabysyphpapi/xnabysygs (projet hôte)
 //    update cli                                      → composer global update nabysyphpapi/xnabysygs-cli
 //    doc                                             (alias: d) Ouvre api/describe?HTML=1 dans le navigateur
 //    version                                         (alias: v)
@@ -79,6 +79,10 @@ class NAbySyCLI
         'a'   => 'action',
         'o'   => 'orm',
         'r'   => 'route',
+        // observer — 3 aliases possibles
+        'observer' => 'observer',
+        'event'    => 'observer',
+        'obs'      => 'observer',
         // sous-commandes db
         'u'   => 'update',
     ];
@@ -164,9 +168,10 @@ class NAbySyCLI
             'action'    => self::createAction(array_slice($args, 1), $opts),
             'orm'       => self::createOrm(array_slice($args, 1), $opts),
             'route'     => self::createRoute(array_slice($args, 1), $opts),
+            'observer'  => self::createObserver(array_slice($args, 1), $opts),
             default     => self::error(
                 "Sous-commande 'create {$sub}' inconnue.\n"
-                . "  Utilisez: categorie (cat) | action (a) | orm (o) | route (r)"
+                . "  Utilisez: categorie (cat) | action (a) | orm (o) | route (r) | observer (obs|event)"
             ),
         };
     }
@@ -306,6 +311,30 @@ class NAbySyCLI
         self::success("Route " . self::B . $nom . self::R . self::G . " enregistrée dans " . self::$structFile);
 
         self::cmdDbUpdate($nom);
+    }
+
+    // ── create observer / event / obs ───────────────────────
+    private static function createObserver(array $args, array $opts): void
+    {
+        $table = $args[0] ?? '';
+        $nom   = $args[1] ?? $table; // 2ème param optionnel — défaut = table
+
+        if (empty($table)) {
+            self::error("Nom de table requis.\n  Usage: nsy create observer <table> [nom]");
+            exit(1);
+        }
+
+        self::info("Enregistrement de l'observateur " . self::B . self::C . $table . self::R
+            . ($nom !== $table ? " (nom: {$nom})" : '') . "...");
+
+        $line    = 'N::$GSModManager::GenerateTableObserver("' . $table . '", "' . $nom . '");';
+        $written = self::writeToStructureFile($table, $line);
+        if (!$written) return;
+
+        self::success("Observateur " . self::B . $table . self::R . self::G
+            . " enregistré dans " . self::$structFile);
+
+        self::cmdDbUpdate($table);
     }
 
     // ============================================================
@@ -1012,15 +1041,28 @@ class NAbySyCLI
         $sub = strtolower($args[0] ?? '');
 
         if ($sub === 'cli') {
+            // La CLI est installée globalement → composer global update
             self::info("Mise à jour de la CLI NAbySyGS...");
             $cmd = 'composer global update nabysyphpapi/xnabysygs-cli';
+            self::dim("  → {$cmd}");
+            passthru($cmd, $exitCode);
         } else {
+            // Le framework est dans le projet hôte → composer update --working-dir
             self::info("Mise à jour du framework NAbySyGS...");
-            $cmd = 'composer global update nabysyphpapi/xnabysygs';
+            $composerBin = self::findComposer();
+            if ($composerBin === null) {
+                self::error("Composer introuvable sur cette machine.");
+                exit(1);
+            }
+            if (empty(self::$root)) {
+                self::error("Racine du projet introuvable. Utilisez --root <chemin>.");
+                exit(1);
+            }
+            $cmd = $composerBin . ' update nabysyphpapi/xnabysygs --working-dir='
+                . escapeshellarg(rtrim(self::$root, DIRECTORY_SEPARATOR));
+            self::dim("  → {$cmd}");
+            passthru($cmd, $exitCode);
         }
-
-        self::dim("  → {$cmd}");
-        passthru($cmd, $exitCode);
 
         if ($exitCode === 0) {
             self::success($sub === 'cli' ? "CLI mise à jour avec succès." : "Framework mis à jour avec succès.");
@@ -1111,6 +1153,10 @@ class NAbySyCLI
         Enregistre un contrôleur de route dans db_structure.php.
         Dossier optionnel (défaut: <nom> en minuscules).
 
+    {$y}observer{$r} {$d}(obs|event){$r} <table> [nom]
+        Enregistre un observateur de table dans db_structure.php.
+        nom optionnel (défaut: valeur de table).
+
   {$g}db{$r}
     {$y}update{$r} {$d}(u){$r}
         Appelle l'API du projet avec Action=NABYSY_STRUCURE_UPDATE.
@@ -1118,8 +1164,8 @@ class NAbySyCLI
         Appelé automatiquement après chaque commande create.
 
   {$g}update{$r}
-    Met à jour le framework NAbySyGS via Composer global.
-    {$d}composer global update nabysyphpapi/xnabysygs{$r}
+    Met à jour le framework NAbySyGS dans le projet hôte.
+    {$d}composer update nabysyphpapi/xnabysygs{$r}
 
   {$g}update cli{$r}
     Met à jour la CLI NAbySyGS via Composer global.
@@ -1158,6 +1204,10 @@ class NAbySyCLI
 
   {$c}{$bin} create route produit gs/produit{$r}
   {$c}{$bin} c r produit gs/produit{$r}
+
+  {$c}{$bin} create observer patient{$r}
+  {$c}{$bin} c obs patient{$r}
+  {$c}{$bin} c event patient patientObserver{$r}
 
   {$c}{$bin} create categorie client --root /var/www/monprojet{$r}
   {$c}{$bin} create categorie client --struct structure/mon_fichier.php{$r}

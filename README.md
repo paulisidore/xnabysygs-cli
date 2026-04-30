@@ -48,6 +48,7 @@ koro create categorie <nom> [-a] [-o] [-t <table>]
 koro create action    <nom>
 koro create orm       <nom> <table> [dossier]
 koro create route     <nom> [dossier]
+koro create observer  <table> [nom]
 koro db update
 koro update
 koro update cli
@@ -56,7 +57,7 @@ koro version
 koro help
 ```
 
-`nsy` est un alias complet de `koro`. Tous les alias courts fonctionnent aussi : `i`, `c`, `cat`, `a`, `o`, `r`, `v`, `h`.
+`nsy` est un alias complet de `koro`. Tous les alias courts fonctionnent aussi : `i`, `c`, `cat`, `a`, `o`, `r`, `obs`, `event`, `v`, `h`.
 
 ---
 
@@ -147,6 +148,39 @@ koro create orm xProduit produits gs/produit
 
 ---
 
+### `koro create observer` — Créer un observateur de table
+
+Enregistre un observateur (observer/event) sur une table dans `db_structure.php`. L'observateur est notifié à chaque opération sur la table (INSERT, UPDATE, DELETE).
+
+```bash
+koro create observer <table> [nom]
+# alias
+koro c obs <table> [nom]
+koro c event <table> [nom]
+```
+
+Le paramètre `nom` est optionnel — il prend la valeur de `<table>` par défaut.
+
+**Exemple — Observer sur la table patient :**
+
+```bash
+koro create observer patient
+# ou avec un nom personnalisé :
+koro c event patient patientObserver
+```
+
+Écrit dans `db_structure.php` :
+
+```php
+// ── categorie: patient ─────────────────────────────── 2026-04-25 00:46 ──
+N::$GSModManager::GenerateTableObserver("patient", "patient");
+// ── end: patient ───────────────────────────────────────────────────────
+```
+
+> Les observateurs permettent de réagir aux événements métier (audit, notifications, cascades) sans modifier la logique principale de l'API.
+
+---
+
 ### `koro create route` — Créer un contrôleur de route URL
 
 Enregistre un contrôleur de routage URL Laravel-style dans `db_structure.php`.
@@ -199,19 +233,19 @@ koro db update --url http://kssv5/api/shop
 
 ### `koro update` — Mettre à jour le framework
 
-Met à jour le package **nabysyphpapi/xnabysygs** via Composer global.
+Met à jour le package **nabysyphpapi/xnabysygs** dans le projet hôte courant via Composer.
 
 ```bash
 koro update
 # équivalent à :
-composer global update nabysyphpapi/xnabysygs
+composer update nabysyphpapi/xnabysygs
 ```
 
 ---
 
 ### `koro update cli` — Mettre à jour la CLI
 
-Met à jour le package **nabysyphpapi/xnabysygs-cli** via Composer global.
+Met à jour le package **nabysyphpapi/xnabysygs-cli** via Composer global (installation globale).
 
 ```bash
 koro update cli
@@ -295,8 +329,9 @@ Si le fichier n'existe pas, il est créé automatiquement avec un en-tête docum
 # Initialiser un nouveau projet
 koro init mon-projet-api
 
-# Module complet : catégorie + action + ORM + route URL
+# Module complet : catégorie + action + ORM + observer + route URL
 koro create categorie client -a -o -t clients
+koro create observer client
 koro create route client client
 
 # Module minimal (catégorie seule)
