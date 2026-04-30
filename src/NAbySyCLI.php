@@ -1098,13 +1098,14 @@ class NAbySyCLI
                 $tmpBat     = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'nsy_update_cli_' . getmypid() . '.bat';
                 $composerBin = self::findComposer() ?? 'composer';
                 $batContent  = "@echo off\r\n"
-                    . "timeout /t 1 /nobreak >nul\r\n"
-                    . "{$composerBin} global update nabysyphpapi/xnabysygs-cli\r\n"
-                    . "del \"%~f0\"\r\n"; // auto-suppression du .bat
+                    . "timeout /t 1 /nobreak >nul 2>&1\r\n"
+                    . "{$composerBin} global update nabysyphpapi/xnabysygs-cli >nul 2>&1\r\n"
+                    . "del \"%~f0\" >nul 2>&1\r\n";
 
                 file_put_contents($tmpBat, $batContent);
                 self::dim("  → Mise à jour déléguée (processus détaché)...");
-                pclose(popen('start /b "" "' . $tmpBat . '"', 'r'));
+                // Nouvelle fenêtre cmd minimisée — complètement détachée du terminal courant
+                pclose(popen('start /min "" cmd /c "' . $tmpBat . '"', 'r'));
                 self::success("Mise à jour lancée en arrière-plan.");
                 self::dim("  La nouvelle version sera active au prochain appel de koro.");
                 return;
