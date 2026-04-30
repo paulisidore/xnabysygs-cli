@@ -36,7 +36,7 @@ class NAbySyCLI
     private const B  = "\033[1m";
     private const D  = "\033[2m";
 
-    private const VERSION = '1.4.6'; // Fallback si composer.json illisible
+    private const VERSION = '1.4.2'; // Fallback si composer.json illisible
 
     // ── Lecture dynamique de la version depuis composer.json ─
     private static function getVersion(): string
@@ -1077,17 +1077,50 @@ class NAbySyCLI
 
     // ============================================================
     //  Commande : update [cli]
+    //
+    //  koro update      → composer update dans le projet hôte (--working-dir)
+    //  koro update cli  → composer global update (CLI installée globalement)
+    //
+    //  Sur Windows, la mise à jour de la CLI est déléguée à un script
+    //  batch détaché pour éviter le verrouillage des binaires en cours
+    //  d'exécution (Permission denied sur koro/nsy).
     // ============================================================
     private static function cmdUpdate(array $args): void
     {
         $sub = strtolower($args[0] ?? '');
 
         if ($sub === 'cli') {
-            // La CLI est installée globalement → composer global update
             self::info("Mise à jour de la CLI NAbySyGS...");
+
+            if (PHP_OS_FAMILY === 'Windows') {
+                // Sur Windows : déléguer à un .bat temporaire détaché
+                // pour éviter le verrouillage des binaires koro/nsy en cours d'exécution
+                $tmpBat     = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'nsy_update_cli_' . getmypid() . '.bat';
+                $composerBin = self::findComposer() ?? 'composer';
+                $batContent  = "@echo off\r\n"
+                    . "timeout /t 1 /nobreak >nul\r\n"
+                    . "{$composerBin} global update nabysyphpapi/xnabysygs-cli\r\n"
+                    . "del \"%~f0\"\r\n"; // auto-suppression du .bat
+
+                file_put_contents($tmpBat, $batContent);
+                self::dim("  → Mise à jour déléguée (processus détaché)...");
+                pclose(popen('start /b "" "' . $tmpBat . '"', 'r'));
+                self::success("Mise à jour lancée en arrière-plan.");
+                self::dim("  La nouvelle version sera active au prochain appel de koro.");
+                return;
+            }
+
+            // Linux/macOS : pas de verrouillage, lancement direct
             $cmd = 'composer global update nabysyphpapi/xnabysygs-cli';
             self::dim("  → {$cmd}");
             passthru($cmd, $exitCode);
+            if ($exitCode === 0) {
+                self::success("CLI mise à jour avec succès.");
+            } else {
+                self::error("La mise à jour a échoué (code {$exitCode}).");
+                exit($exitCode);
+            }
+
         } else {
             // Le framework est dans le projet hôte → composer update --working-dir
             self::info("Mise à jour du framework NAbySyGS...");
@@ -1104,13 +1137,12 @@ class NAbySyCLI
                 . escapeshellarg(rtrim(self::$root, DIRECTORY_SEPARATOR));
             self::dim("  → {$cmd}");
             passthru($cmd, $exitCode);
-        }
-
-        if ($exitCode === 0) {
-            self::success($sub === 'cli' ? "CLI mise à jour avec succès." : "Framework mis à jour avec succès.");
-        } else {
-            self::error("La mise à jour a échoué (code {$exitCode}).");
-            exit($exitCode);
+            if ($exitCode === 0) {
+                self::success("Framework mis à jour avec succès.");
+            } else {
+                self::error("La mise à jour a échoué (code {$exitCode}).");
+                exit($exitCode);
+            }
         }
     }
 
