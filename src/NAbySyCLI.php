@@ -1482,7 +1482,42 @@ class NAbySyCLI
         file_put_contents($tokenFile, $token);
         self::success("Authentification réussie. Token sauvegardé.");
 
+        // ── Ajout de .nsy_token dans .gitignore ──────────────
+        self::ensureTokenInGitignore();
+
         return $token;
+    }
+
+    // ============================================================
+    //  Ajout de .nsy_token dans .gitignore du projet hôte
+    //  Appelé une seule fois après la première sauvegarde du token
+    // ============================================================
+    private static function ensureTokenInGitignore(): void
+    {
+        if (empty(self::$root)) return;
+
+        $gitignore = rtrim(self::$root, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . '.gitignore';
+        $entry     = self::TOKEN_FILE;
+
+        if (file_exists($gitignore)) {
+            $contenu = file_get_contents($gitignore);
+            if ($contenu === false) return;
+
+            // Vérifier si .nsy_token est déjà présent (ligne exacte)
+            $lignes = array_map('trim', explode("\n", $contenu));
+            if (in_array($entry, $lignes, true)) return;
+
+            // Ajouter à la fin avec un commentaire
+            $suffix  = str_ends_with(rtrim($contenu), PHP_EOL) ? '' : PHP_EOL;
+            $ajout   = $suffix . PHP_EOL . '# NAbySyGS CLI — token de session local' . PHP_EOL . $entry . PHP_EOL;
+            file_put_contents($gitignore, $contenu . $ajout);
+        } else {
+            // Créer le .gitignore avec l'entrée
+            $contenu = '# NAbySyGS CLI — token de session local' . PHP_EOL . $entry . PHP_EOL;
+            file_put_contents($gitignore, $contenu);
+        }
+
+        self::dim("  → .nsy_token ajouté dans .gitignore");
     }
 
     // ============================================================
