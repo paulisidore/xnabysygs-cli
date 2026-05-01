@@ -53,6 +53,7 @@ koro db update
 koro update
 koro update cli
 koro doc
+koro log             [app|sql|error] [--month=mmyyyy | --m=mmyyyy]
 koro version
 koro help
 ```
@@ -278,6 +279,39 @@ koro doc --url http://monapi.local
 
 ---
 
+### `koro log` — Consulter le journal de l'application
+
+Génère une page HTML interactive et l'ouvre dans le navigateur par défaut. Les fichiers log sont lus depuis `[RACINE_PROJET]/log/`.
+
+```bash
+koro log                        # tous les fichiers du mois courant (multi-onglets)
+koro log app                    # journal applicatif uniquement
+koro log sql                    # requêtes SQL uniquement
+koro log error                  # erreurs SQL uniquement
+koro log --month 042026         # mois spécifique (avril 2026)
+koro log app --m 012026         # journal applicatif de janvier 2026
+```
+
+**Fichiers reconnus dans `[RACINE]/log/` :**
+
+| Fichier | Onglet affiché |
+|---------|----------------|
+| `NAbySyGS_Log-mmyyyy.csv` | 📋 Journal applicatif |
+| `DebugLOG<bdd>mmyyyy.csv` | 🗄️ Requêtes SQL [bdd] |
+| `DebugLOGError<bdd>mmyyyy.txt` | ⚠️ Erreurs SQL [bdd] |
+
+- Sans argument de type, **tous les fichiers trouvés** pour le mois sont chargés, chacun dans son propre onglet.
+- Si plusieurs bases ont des fichiers pour le même mois, un onglet est créé par base.
+- Les entrées sont affichées en **ordre inverse** (plus récent en premier).
+- Chaque onglet dispose d'une **DataTable** avec filtre, tri par colonne et pagination.
+
+| Option | Description |
+|--------|-------------|
+| `--month <mmyyyy>` | Mois cible (ex: `042026` pour avril 2026) |
+| `--m <mmyyyy>` | Alias court de `--month` |
+
+---
+
 ### `koro version`
 
 ```bash
@@ -358,6 +392,12 @@ koro update cli      # met à jour la CLI
 # Documentation des routes
 koro doc
 koro doc --url http://monapi.local
+
+# Journal de l'application
+koro log                        # tous les onglets — mois courant
+koro log app                    # journal applicatif seulement
+koro log sql --month 042026     # requêtes SQL d'avril 2026
+koro log error --m 012026       # erreurs SQL de janvier 2026
 
 # Debug activé
 koro create orm xProduit produits --debug

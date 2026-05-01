@@ -15,6 +15,7 @@
 //    update                                          → composer update nabysyphpapi/xnabysygs (projet hôte)
 //    update cli                                      → composer global update nabysyphpapi/xnabysygs-cli
 //    doc                                             (alias: d) Ouvre api/describe?HTML=1 dans le navigateur
+//    log [app|sql|error] [--month=mmyyyy|--m=mmyyyy] Ouvre le journal HTML dans le navigateur
 //    version                                         (alias: v)
 //    help                                            (alias: h)
 //
@@ -185,7 +186,7 @@ class NAbySyCLI
 
         // ── Détection du framework NAbySyGS dans le projet ──
         // On vérifie uniquement pour les commandes qui en ont besoin
-        if (!in_array($cmd, ['help', 'version', 'init', 'update', 'doc', 'user'])) {
+        if (!in_array($cmd, ['help', 'version', 'init', 'update', 'doc', 'user', 'log'])) {
             if (!self::checkAndInstallFramework()) {
                 exit(0);
             }
@@ -197,6 +198,7 @@ class NAbySyCLI
             'init'    => self::cmdInit(array_slice($args, 1), $opts),
             'update'  => self::cmdUpdate(array_slice($args, 1)),
             'doc'     => self::cmdDoc(),
+            'log'     => self::cmdLog(array_slice($args, 1), $opts),
             'user'    => self::cmdUser(array_slice($args, 1), $opts),
             'version' => self::cmdVersion(),
             'help'    => self::cmdHelp($bin),
@@ -1567,6 +1569,657 @@ class NAbySyCLI
     }
 
     // ============================================================
+    //  Commande : log [app|sql|error] [--month=mmyyyy | --m=mmyyyy]
+    //
+    //  Lit les fichiers log du dossier [RACINE_PROJET]/log/ et
+    //  génère une page HTML avec onglets + DataTable, puis l'ouvre
+    //  dans le navigateur (même comportement que koro doc).
+    //
+    //  Fichiers reconnus :
+    //    NAbySyGS_Log-mmyyyy.csv          → onglet "Journal applicatif"
+    //    DebugLOG<database><mmyyyy>.csv   → onglet "Requêtes SQL"
+    //    DebugLOGError<database><mmyyyy>.txt → onglet "Erreurs SQL"
+    //
+    //  Sans argument  : tous les fichiers du mois courant (multi-onglets)
+    //  log app        : uniquement le log applicatif
+    //  log sql        : uniquement les requêtes SQL
+    //  log error      : uniquement les erreurs SQL
+    //  --month=042026 ou --m=042026 : choisir un mois précis
+    // ============================================================
+    private static function cmdLog(array $args, array $opts): void
+    {
+        // ── Résolution de la racine du projet ──────────────────
+        if (empty(self::$root)) {
+            self::error(
+                "Racine du projet introuvable.\n"
+                . "  Utilisez " . self::Y . "--root <chemin>" . self::R2
+                . " ou lancez la commande depuis un projet NAbySyGS."
+            );
+            exit(1);
+        }
+
+        // ── Filtre de type (argument positionnel) ───────────────
+        $filtre = strtolower($args[0] ?? ''); // 'app' | 'sql' | 'error' | ''
+
+        // ── Résolution du mois (--month ou --m) ─────────────────
+        // Format attendu : mmyyyy (ex: 042026)
+        $monthOpt = $opts['month'] ?? $opts['m'] ?? null;
+        if ($monthOpt !== null) {
+            // Valider le format mmyyyy
+            if (!preg_match('/^\d{6}$/', (string)$monthOpt)) {
+                self::error("Format de mois invalide : " . $monthOpt . "\n  Attendu : mmyyyy (ex: 042026)");
+                exit(1);
+            }
+            $moisCible = (string)$monthOpt;
+        } else {
+            // Mois courant
+            $moisCible = date('m') . date('Y');
+        }
+
+        $logDir = rtrim(self::$root, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . 'log' . DIRECTORY_SEPARATOR;
+
+        if (!is_dir($logDir)) {
+            self::error("Dossier log introuvable : {$logDir}");
+            exit(1);
+        }
+
+        // ── Recherche des fichiers selon le filtre ──────────────
+        $fichierApp   = null;
+        $fichiersSql  = []; // peut y en avoir plusieurs (bases différentes)
+        $fichiersErr  = [];
+
+        // Log applicatif : NAbySyGS_Log-<mm><yyyy>.csv
+        if ($filtre === '' || $filtre === 'app') {
+            $candidatApp = $logDir . 'NAbySyGS_Log-' . $moisCible . '.csv';
+            if (file_exists($candidatApp)) {
+                $fichierApp = $candidatApp;
+            }
+        }
+
+        // Requêtes SQL : DebugLOG<database><mmyyyy>.csv
+        if ($filtre === '' || $filtre === 'sql') {
+            $globSql = glob($logDir . 'DebugLOG*' . $moisCible . '.csv');
+            if ($globSql !== false) {
+                foreach ($globSql as $f) {
+                    // Exclure les fichiers DebugLOGError*
+                    if (!str_contains(basename($f), 'DebugLOGError')) {
+                        $fichiersSql[] = $f;
+                    }
+                }
+            }
+        }
+
+        // Erreurs SQL : DebugLOGError<database><mmyyyy>.txt
+        if ($filtre === '' || $filtre === 'error') {
+            $globErr = glob($logDir . 'DebugLOGError*' . $moisCible . '.txt');
+            if ($globErr !== false) {
+                $fichiersErr = $globErr;
+            }
+        }
+
+        // ── Vérification : au moins un fichier trouvé ───────────
+        $totalFichiers = (int)($fichierApp !== null)
+            + count($fichiersSql)
+            + count($fichiersErr);
+
+        if ($totalFichiers === 0) {
+            $moisAff = substr($moisCible, 0, 2) . '/' . substr($moisCible, 2);
+            self::error(
+                "Aucun fichier log trouvé pour le mois " . self::B . $moisAff . self::R . self::R2
+                . " dans : {$logDir}"
+            );
+            exit(1);
+        }
+
+        // ── Lecture et parsing des fichiers ─────────────────────
+        $tabs = [];
+
+        // --- Onglet applicatif ---
+        if ($fichierApp !== null) {
+            $lignes = self::lireLogApp($fichierApp);
+            $tabs[] = [
+                'id'     => 'tab-app',
+                'label'  => '📋 Journal applicatif',
+                'type'   => 'app',
+                'count'  => count($lignes),
+                'lignes' => $lignes,
+            ];
+        }
+
+        // --- Onglets SQL (un par fichier de base) ---
+        foreach ($fichiersSql as $fSql) {
+            $dbName = self::extraireNomBase($fSql, 'DebugLOG', $moisCible, '.csv');
+            $lignes = self::lireLogSql($fSql);
+            $tabs[] = [
+                'id'     => 'tab-sql-' . preg_replace('/[^a-z0-9]/i', '', $dbName),
+                'label'  => '🗄️ Requêtes SQL' . ($dbName ? " [{$dbName}]" : ''),
+                'type'   => 'sql',
+                'count'  => count($lignes),
+                'lignes' => $lignes,
+            ];
+        }
+
+        // --- Onglets Erreurs SQL ---
+        foreach ($fichiersErr as $fErr) {
+            $dbName = self::extraireNomBase($fErr, 'DebugLOGError', $moisCible, '.txt');
+            $lignes = self::lireLogErreur($fErr);
+            $tabs[] = [
+                'id'     => 'tab-err-' . preg_replace('/[^a-z0-9]/i', '', $dbName),
+                'label'  => '⚠️ Erreurs SQL' . ($dbName ? " [{$dbName}]" : ''),
+                'type'   => 'error',
+                'count'  => count($lignes),
+                'lignes' => $lignes,
+            ];
+        }
+
+        // ── Génération du HTML ──────────────────────────────────
+        $moisAff = substr($moisCible, 0, 2) . '/' . substr($moisCible, 2);
+        $html    = self::genererHtmlLog($tabs, $moisAff, $logDir);
+
+        // ── Écriture du fichier temporaire ──────────────────────
+        $tmpFile = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'nabysy_log_' . getmypid() . '.html';
+        if (file_put_contents($tmpFile, $html) === false) {
+            self::error("Impossible d'écrire le fichier HTML temporaire.");
+            exit(1);
+        }
+
+        $url = 'file:///' . str_replace('\\', '/', $tmpFile);
+        self::info("Ouverture du journal NAbySyGS : " . self::C . $url . self::R);
+        self::dim("  Mois : {$moisAff} — {$totalFichiers} fichier(s) chargé(s)");
+
+        match (PHP_OS_FAMILY) {
+            'Windows' => pclose(popen('start "" "' . $tmpFile . '"', 'r')),
+            'Darwin'  => exec('open '     . escapeshellarg($tmpFile)),
+            default   => exec('xdg-open ' . escapeshellarg($tmpFile)),
+        };
+    }
+
+    // ── Extraction du nom de base depuis un nom de fichier log ─
+    // Ex: "DebugLOGnabysygstest042026.csv" → "nabysygstest"
+    private static function extraireNomBase(
+        string $fichier,
+        string $prefix,
+        string $mois,
+        string $ext
+    ): string {
+        $base = basename($fichier, $ext);     // ex: DebugLOGnabysygstest042026
+        $base = substr($base, strlen($prefix)); // ex: nabysygstest042026
+        $base = rtrim($base, $mois);           // retirer le mois en fin (approx)
+        // Retrait exact du suffixe mmyyyy
+        if (str_ends_with($base, $mois)) {
+            $base = substr($base, 0, -strlen($mois));
+        }
+        return $base;
+    }
+
+    // ── Parsing du log applicatif CSV ───────────────────────────
+    // Format : "DD/MM/YYYY HH:MM:SS <fichier> Ligne: <n>: <message>"
+    private static function lireLogApp(string $fichier): array
+    {
+        $lignes  = [];
+        $contenu = file($fichier, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+        if ($contenu === false) return [];
+
+        foreach ($contenu as $ligne) {
+            $ligne = trim($ligne);
+            if (empty($ligne)) continue;
+
+            // Extraction date/heure (DD/MM/YYYY HH:MM:SS)
+            $date    = '';
+            $heure   = '';
+            $fichierSrc = '';
+            $numLigne   = '';
+            $message    = $ligne;
+
+            if (preg_match(
+                '/^(\d{2}\/\d{2}\/\d{4})\s+(\d{2}:\d{2}:\d{2})\s+(.+?)\s+Ligne:\s*(\d+):\s*(.+)$/s',
+                $ligne, $m
+            )) {
+                $date       = $m[1];
+                $heure      = $m[2];
+                $fichierSrc = $m[3];
+                $numLigne   = $m[4];
+                $message    = $m[5];
+            }
+
+            $lignes[] = [
+                'date'    => $date,
+                'heure'   => $heure,
+                'fichier' => $fichierSrc,
+                'ligne'   => $numLigne,
+                'message' => $message,
+                'raw'     => $ligne,
+            ];
+        }
+
+        // Ordre inverse (plus récent en premier)
+        return array_reverse($lignes);
+    }
+
+    // ── Parsing du log SQL CSV ───────────────────────────────────
+    // Format : "yyyy-mm-dd;hh:mm:ss;<requete>"
+    private static function lireLogSql(string $fichier): array
+    {
+        $lignes  = [];
+        $contenu = file($fichier, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+        if ($contenu === false) return [];
+
+        foreach ($contenu as $ligne) {
+            $ligne = trim($ligne);
+            if (empty($ligne)) continue;
+
+            $parts = explode(';', $ligne, 3);
+            $lignes[] = [
+                'date'    => $parts[0] ?? '',
+                'heure'   => $parts[1] ?? '',
+                'requete' => $parts[2] ?? $ligne,
+                'raw'     => $ligne,
+            ];
+        }
+
+        return array_reverse($lignes);
+    }
+
+    // ── Parsing du log Erreurs SQL TXT ──────────────────────────
+    // Format : "yyyy-mm-dd;hh:mm:ss;yyyy-mm-dd;hh:mm:ss;<requete>;<erreur>"
+    private static function lireLogErreur(string $fichier): array
+    {
+        $lignes  = [];
+        $contenu = file($fichier, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+        if ($contenu === false) return [];
+
+        foreach ($contenu as $ligne) {
+            $ligne = trim($ligne);
+            if (empty($ligne)) continue;
+
+            // Format observé : date;heure;date;heure;requete;erreur
+            $parts = explode(';', $ligne, 6);
+            $lignes[] = [
+                'date'    => $parts[0] ?? '',
+                'heure'   => $parts[1] ?? '',
+                'requete' => $parts[4] ?? ($parts[2] ?? $ligne),
+                'erreur'  => $parts[5] ?? '',
+                'raw'     => $ligne,
+            ];
+        }
+
+        return array_reverse($lignes);
+    }
+
+    // ── Génération de la page HTML complète ─────────────────────
+    private static function genererHtmlLog(array $tabs, string $moisAff, string $logDir): string
+    {
+        $version  = self::getVersion();
+        $genDate  = date('d/m/Y H:i:s');
+        $logDirEsc = htmlspecialchars($logDir, ENT_QUOTES);
+
+        // ── Construction des onglets (boutons) ──────────────────
+        $tabBtns = '';
+        foreach ($tabs as $i => $tab) {
+            $active    = $i === 0 ? ' active' : '';
+            $badge     = $tab['count'];
+            $typeClass = 'tab-type-' . $tab['type'];
+            $tabBtns  .= '<button class="tab-btn' . $active . ' ' . $typeClass . '"'
+                . ' data-tab="' . $tab['id'] . '">'
+                . htmlspecialchars($tab['label'], ENT_QUOTES)
+                . ' <span class="badge">' . $badge . '</span>'
+                . '</button>';
+        }
+
+        // ── Construction du contenu de chaque onglet ────────────
+        $tabContents = '';
+        foreach ($tabs as $i => $tab) {
+            $active  = $i === 0 ? ' active' : '';
+            $tableId = 'dt-' . $tab['id'];
+
+            $thead = '';
+            $tbody = '';
+
+            if ($tab['type'] === 'app') {
+                $thead = '<tr>'
+                    . '<th>Date</th>'
+                    . '<th>Heure</th>'
+                    . '<th>Fichier source</th>'
+                    . '<th>Ligne</th>'
+                    . '<th>Message</th>'
+                    . '</tr>';
+                foreach ($tab['lignes'] as $l) {
+                    $msg = htmlspecialchars($l['message'], ENT_QUOTES);
+                    // Colorisation du type de message
+                    $msgClass = '';
+                    if (str_contains($l['message'], 'Reponse Evenement')) {
+                        $msgClass = 'msg-event-rep';
+                    } elseif (str_contains($l['message'], 'Evenement déclenché')) {
+                        $msgClass = 'msg-event';
+                    }
+                    // Nom de fichier raccourci (dernier segment)
+                    $fichierCourt = basename($l['fichier']);
+                    $fichierTitle = htmlspecialchars($l['fichier'], ENT_QUOTES);
+                    $tbody .= '<tr>'
+                        . '<td class="col-date">' . htmlspecialchars($l['date'], ENT_QUOTES) . '</td>'
+                        . '<td class="col-time">' . htmlspecialchars($l['heure'], ENT_QUOTES) . '</td>'
+                        . '<td class="col-file" title="' . $fichierTitle . '">' . htmlspecialchars($fichierCourt, ENT_QUOTES) . '</td>'
+                        . '<td class="col-line">' . htmlspecialchars($l['ligne'], ENT_QUOTES) . '</td>'
+                        . '<td class="col-msg ' . $msgClass . '">' . $msg . '</td>'
+                        . '</tr>';
+                }
+            } elseif ($tab['type'] === 'sql') {
+                $thead = '<tr>'
+                    . '<th>Date</th>'
+                    . '<th>Heure</th>'
+                    . '<th>Requête SQL</th>'
+                    . '</tr>';
+                foreach ($tab['lignes'] as $l) {
+                    // Colorisation basique des mots-clés SQL
+                    $req = htmlspecialchars($l['requete'], ENT_QUOTES);
+                    $tbody .= '<tr>'
+                        . '<td class="col-date">' . htmlspecialchars($l['date'], ENT_QUOTES) . '</td>'
+                        . '<td class="col-time">' . htmlspecialchars($l['heure'], ENT_QUOTES) . '</td>'
+                        . '<td class="col-sql">' . $req . '</td>'
+                        . '</tr>';
+                }
+            } elseif ($tab['type'] === 'error') {
+                $thead = '<tr>'
+                    . '<th>Date</th>'
+                    . '<th>Heure</th>'
+                    . '<th>Requête</th>'
+                    . '<th>Erreur</th>'
+                    . '</tr>';
+                foreach ($tab['lignes'] as $l) {
+                    $tbody .= '<tr>'
+                        . '<td class="col-date">' . htmlspecialchars($l['date'], ENT_QUOTES) . '</td>'
+                        . '<td class="col-time">' . htmlspecialchars($l['heure'], ENT_QUOTES) . '</td>'
+                        . '<td class="col-sql">' . htmlspecialchars($l['requete'], ENT_QUOTES) . '</td>'
+                        . '<td class="col-err">' . htmlspecialchars($l['erreur'], ENT_QUOTES) . '</td>'
+                        . '</tr>';
+                }
+            }
+
+            $tabContents .= '<div class="tab-content' . $active . '" id="' . $tab['id'] . '">'
+                . '<div class="table-wrap">'
+                . '<table id="' . $tableId . '" class="dt-table display" style="width:100%">'
+                . '<thead>' . $thead . '</thead>'
+                . '<tbody>' . $tbody . '</tbody>'
+                . '</table>'
+                . '</div>'
+                . '</div>';
+        }
+
+        // ── DataTables JS init (une par onglet) ─────────────────
+        $dtInits = '';
+        foreach ($tabs as $tab) {
+            $tableId = '#dt-' . $tab['id'];
+            // Colonnes : index de la colonne message/requete/erreur non triable ? Non, toutes triables.
+            // Order par défaut : colonne 0 (date) DESC — mais c'est déjà l'ordre naturel (reversed)
+            $dtInits .= 'initTable("' . $tableId . '");' . "\n";
+        }
+
+        // ── Assemblage HTML final ────────────────────────────────
+        return <<<HTML
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NAbySyGS — Journal {$moisAff}</title>
+<!-- DataTables CSS -->
+<link rel="stylesheet" href="https://cdn.datatables.net/1.13.6/css/jquery.dataTables.min.css">
+<style>
+  :root {
+    --bg:       #0f1117;
+    --bg2:      #1a1d27;
+    --bg3:      #22263a;
+    --border:   #2e3350;
+    --green:    #4ade80;
+    --yellow:   #facc15;
+    --cyan:     #22d3ee;
+    --red:      #f87171;
+    --blue:     #60a5fa;
+    --text:     #e2e8f0;
+    --muted:    #64748b;
+    --shadow:   0 4px 24px rgba(0,0,0,.45);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+  }
+
+  /* ── Header ── */
+  header {
+    background: linear-gradient(135deg, #1a1d27 0%, #0f1117 100%);
+    border-bottom: 2px solid var(--border);
+    padding: 18px 28px 14px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    box-shadow: var(--shadow);
+  }
+  header .logo {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--green);
+    letter-spacing: -.5px;
+  }
+  header .logo span { color: var(--cyan); }
+  header .meta {
+    margin-left: auto;
+    font-size: .78rem;
+    color: var(--muted);
+    text-align: right;
+    line-height: 1.6;
+  }
+  header .meta strong { color: var(--yellow); }
+
+  /* ── Tab bar ── */
+  .tab-bar {
+    display: flex;
+    gap: 4px;
+    padding: 14px 28px 0;
+    background: var(--bg2);
+    border-bottom: 2px solid var(--border);
+    flex-wrap: wrap;
+  }
+  .tab-btn {
+    padding: 8px 18px;
+    border: 1px solid var(--border);
+    border-bottom: none;
+    border-radius: 6px 6px 0 0;
+    background: var(--bg3);
+    color: var(--muted);
+    font-size: .85rem;
+    cursor: pointer;
+    transition: all .15s;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .tab-btn:hover { color: var(--text); background: var(--bg); }
+  .tab-btn.active {
+    background: var(--bg);
+    color: var(--text);
+    border-bottom: 2px solid var(--bg);
+    margin-bottom: -2px;
+  }
+  .tab-type-app.active   { color: var(--cyan);   border-top: 2px solid var(--cyan); }
+  .tab-type-sql.active   { color: var(--blue);   border-top: 2px solid var(--blue); }
+  .tab-type-error.active { color: var(--red);    border-top: 2px solid var(--red); }
+  .badge {
+    background: var(--border);
+    color: var(--muted);
+    font-size: .7rem;
+    padding: 1px 7px;
+    border-radius: 999px;
+    font-weight: 600;
+  }
+  .tab-btn.active .badge { background: var(--bg3); color: var(--text); }
+
+  /* ── Tab content ── */
+  .tab-content { display: none; padding: 24px 28px; }
+  .tab-content.active { display: block; }
+  .table-wrap { overflow-x: auto; }
+
+  /* ── DataTables overrides ── */
+  .dt-table { border-collapse: collapse; }
+  .dataTables_wrapper { color: var(--text); }
+  .dataTables_wrapper .dataTables_filter input,
+  .dataTables_wrapper .dataTables_length select {
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 4px;
+    padding: 4px 8px;
+  }
+  .dataTables_wrapper .dataTables_info,
+  .dataTables_wrapper .dataTables_paginate { color: var(--muted); font-size: .8rem; }
+  .dataTables_wrapper .paginate_button {
+    color: var(--muted) !important;
+    border-radius: 4px !important;
+  }
+  .dataTables_wrapper .paginate_button.current,
+  .dataTables_wrapper .paginate_button:hover {
+    background: var(--bg3) !important;
+    color: var(--cyan) !important;
+    border-color: var(--border) !important;
+  }
+  table.dataTable thead th {
+    background: var(--bg3);
+    border-bottom: 2px solid var(--border);
+    color: var(--muted);
+    font-size: .75rem;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    padding: 10px 14px;
+    white-space: nowrap;
+  }
+  table.dataTable thead th.sorting:after,
+  table.dataTable thead th.sorting_asc:after,
+  table.dataTable thead th.sorting_desc:after { opacity: .5; }
+  table.dataTable tbody tr {
+    border-bottom: 1px solid var(--border);
+    transition: background .1s;
+  }
+  table.dataTable tbody tr:hover { background: var(--bg3) !important; }
+  table.dataTable tbody td {
+    padding: 9px 14px;
+    vertical-align: top;
+    font-size: .83rem;
+    background: transparent;
+  }
+  /* Alternance de lignes */
+  table.dataTable tbody tr:nth-child(even) { background: rgba(255,255,255,.03); }
+
+  /* ── Colonnes spécifiques ── */
+  .col-date  { white-space: nowrap; color: var(--muted); font-size: .78rem; }
+  .col-time  { white-space: nowrap; color: var(--yellow); font-size: .78rem; font-weight: 600; }
+  .col-file  { white-space: nowrap; color: var(--blue); font-size: .78rem; max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
+  .col-line  { text-align: right; color: var(--muted); font-size: .78rem; }
+  .col-msg   { font-size: .82rem; word-break: break-word; max-width: 600px; }
+  .col-sql   { font-family: 'Cascadia Code', 'Consolas', monospace; font-size: .78rem; word-break: break-all; color: var(--cyan); }
+  .col-err   { font-size: .8rem; color: var(--red); word-break: break-word; }
+
+  /* Colorisation messages applicatifs */
+  .msg-event     { color: var(--cyan); }
+  .msg-event-rep { color: var(--green); }
+
+  /* ── Empty state ── */
+  .empty-state {
+    text-align: center;
+    padding: 60px 20px;
+    color: var(--muted);
+  }
+  .empty-state .icon { font-size: 3rem; margin-bottom: 12px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <div class="logo">NAbySy<span>GS</span> 🦅</div>
+    <div style="font-size:.78rem;color:var(--muted);margin-top:2px">Journal applicatif & SQL</div>
+  </div>
+  <div class="meta">
+    <strong>Mois : {$moisAff}</strong><br>
+    Généré le {$genDate}<br>
+    <span title="{$logDirEsc}">{$logDirEsc}</span><br>
+    CLI v{$version}
+  </div>
+</header>
+
+<div class="tab-bar">
+  {$tabBtns}
+</div>
+
+{$tabContents}
+
+<!-- jQuery + DataTables -->
+<script src="https://code.jquery.com/jquery-3.7.0.min.js"></script>
+<script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
+<script>
+  // ── Initialisation DataTable ──
+  function initTable(selector) {
+    if (!$(selector).length) return;
+    $(selector).DataTable({
+      pageLength: 50,
+      order: [],              // Respecter l'ordre naturel (reverse chronologique)
+      language: {
+        search:         "🔍 Filtrer :",
+        lengthMenu:     "Afficher _MENU_ entrées",
+        info:           "_START_ – _END_ sur _TOTAL_ entrées",
+        infoEmpty:      "Aucune entrée",
+        infoFiltered:   "(filtrée sur _MAX_ entrées)",
+        paginate: { previous: "◀", next: "▶" },
+        emptyTable:     "Aucune donnée disponible",
+        zeroRecords:    "Aucun résultat pour ce filtre"
+      },
+      columnDefs: [
+        { targets: '_all', className: 'dt-left' }
+      ]
+    });
+  }
+
+  // ── Gestion des onglets ──
+  document.querySelectorAll('.tab-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      var tabId = this.dataset.tab;
+      // Désactiver tout
+      document.querySelectorAll('.tab-btn').forEach(function(b) { b.classList.remove('active'); });
+      document.querySelectorAll('.tab-content').forEach(function(c) { c.classList.remove('active'); });
+      // Activer l'onglet cliqué
+      this.classList.add('active');
+      var content = document.getElementById(tabId);
+      if (content) {
+        content.classList.add('active');
+        // Initialiser DataTable si pas encore fait (lazy init)
+        var tableId = '#dt-' + tabId;
+        if ($(tableId).length && !$.fn.DataTable.isDataTable(tableId)) {
+          initTable(tableId);
+        }
+        // Redessiner si déjà initialisé (fix largeur colonnes après display:none)
+        if ($.fn.DataTable.isDataTable(tableId)) {
+          $(tableId).DataTable().columns.adjust();
+        }
+      }
+    });
+  });
+
+  // ── Init du premier onglet au chargement ──
+  $(document).ready(function() {
+    var firstActive = document.querySelector('.tab-content.active');
+    if (firstActive) {
+      var tableId = '#dt-' + firstActive.id;
+      initTable(tableId);
+    }
+  });
+</script>
+</body>
+</html>
+HTML;
+    }
+
+    // ============================================================
     //  Commande : version
     // ============================================================
     private static function cmdVersion(): void
@@ -1665,6 +2318,15 @@ class NAbySyCLI
     L'URL est construite depuis {$y}__SERVER_URL__{$r} (+ {$y}__BASEDIR__{$r} si défini) dans appinfos.php.
     Surchargeable avec {$y}--url{$r}.
 
+  {$g}log{$r} {$d}[app|sql|error] [--month=mmyyyy]{$r}
+    Génère et ouvre le journal NAbySyGS dans le navigateur.
+    Sans argument : affiche tous les fichiers log du mois courant (multi-onglets).
+    {$d}app{$r}            Uniquement le journal applicatif ({$d}NAbySyGS_Log-mmyyyy.csv{$r})
+    {$d}sql{$r}            Uniquement les requêtes SQL ({$d}DebugLOG<bdd>mmyyyy.csv{$r})
+    {$d}error{$r}          Uniquement les erreurs SQL ({$d}DebugLOGError<bdd>mmyyyy.txt{$r})
+    {$y}--month{$r} {$d}mmyyyy{$r}  Choisir un mois précis (ex: {$d}042026{$r} pour avril 2026)
+    {$y}--m{$r} {$d}mmyyyy{$r}      Alias court de --month
+
   {$g}version{$r} {$d}(v){$r}
     Affiche la version du CLI.
 
@@ -1720,6 +2382,11 @@ class NAbySyCLI
 
   {$c}{$bin} doc{$r}
   {$c}koro doc --url http://monapi.local{$r}
+
+  {$c}{$bin} log{$r}
+  {$c}{$bin} log app{$r}
+  {$c}{$bin} log sql --month 042026{$r}
+  {$c}{$bin} log error --m 012026{$r}
 
 HELP;
     }
