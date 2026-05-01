@@ -109,6 +109,9 @@ class NAbySyCLI
     // Nom par défaut du fichier de structure généré
     private const DEFAULT_STRUCT_FILE = 'db_structure.php';
 
+    // Nom du fichier token stocké à la racine du projet hôte
+    private const TOKEN_FILE = '.nsy_token';
+
     // ── Alias de commandes ───────────────────────────────────
     private const ALIASES = [
         'c'   => 'create',
@@ -127,6 +130,9 @@ class NAbySyCLI
         'obs'      => 'observer',
         // sous-commandes db
         'u'   => 'update',
+        // sous-commandes user
+        'set-login' => 'set-login',
+        'set-pwd'   => 'set-pwd',
     ];
 
     private static bool   $debug      = false;
@@ -179,9 +185,9 @@ class NAbySyCLI
 
         // ── Détection du framework NAbySyGS dans le projet ──
         // On vérifie uniquement pour les commandes qui en ont besoin
-        if (!in_array($cmd, ['help', 'version', 'init', 'update', 'doc'])) {
+        if (!in_array($cmd, ['help', 'version', 'init', 'update', 'doc', 'user'])) {
             if (!self::checkAndInstallFramework()) {
-                exit(0); // Setup requis — commande suspendue proprement
+                exit(0);
             }
         }
 
@@ -191,6 +197,7 @@ class NAbySyCLI
             'init'    => self::cmdInit(array_slice($args, 1), $opts),
             'update'  => self::cmdUpdate(array_slice($args, 1)),
             'doc'     => self::cmdDoc(),
+            'user'    => self::cmdUser(array_slice($args, 1), $opts),
             'version' => self::cmdVersion(),
             'help'    => self::cmdHelp($bin),
             default   => self::cmdUnknown($cmd, $bin),
@@ -1181,6 +1188,385 @@ class NAbySyCLI
     }
 
     // ============================================================
+    //  Commande : user
+    // ============================================================
+    private static function cmdUser(array $args, array $opts): void
+    {
+        $sub = strtolower($args[0] ?? '');
+        $sub = self::ALIASES[$sub] ?? $sub;
+
+        match ($sub) {
+            'list'      => self::userList($opts),
+            'create'    => self::userCreate($opts),
+            'delete'    => self::userDelete($opts),
+            'set-login' => self::userSetLogin($opts),
+            'set-pwd'   => self::userSetPwd($opts),
+            default     => self::error(
+                "Sous-commande 'user {$sub}' inconnue.\n"
+                . "  Utilisez: list | create | delete | set-login | set-pwd"
+            ),
+        };
+    }
+
+    // ── user list ───────────────────────────────────────────
+    private static function userList(array $opts): void
+    {
+        self::info("Récupération de la liste des utilisateurs...");
+
+        $login  = $opts['login'] ?? null;
+        $url    = self::resolveApiUrl();
+        if (!$url) { self::error("URL de l'API introuvable."); return; }
+
+        $token = self::requireToken($url);
+        if (!$token) return;
+
+        $endpoint = $url . '/?Action=USERAPI_GETUSER'
+            . ($login ? '&LOGIN=' . urlencode($login) : '')
+            . '&Token=' . urlencode($token);
+
+        $rep = self::apiGet($endpoint, $url);
+        if ($rep === null) return;
+
+        $liste = $rep->Contenue ?? [];
+        if (empty($liste)) {
+            self::info($login ? "Aucun utilisateur trouvé pour le login : {$login}" : "Aucun utilisateur.");
+            return;
+        }
+
+        // ── Affichage tabulaire ──────────────────────────────
+        $cols = ['ID', 'NOM', 'PRENOM', 'LOGIN', 'NIVEAUACCES', 'PROFILE', 'ETAT'];
+        $widths = array_fill_keys($cols, 0);
+        foreach ($cols as $c) $widths[$c] = strlen($c);
+        foreach ($liste as $u) {
+            $u = (array)$u;
+            foreach ($cols as $c) {
+                $widths[$c] = max($widths[$c], strlen((string)($u[$c] ?? '')));
+            }
+        }
+
+        // En-tête
+        $sep = '+' . implode('+', array_map(fn($w) => str_repeat('-', $w + 2), $widths)) . '+';
+        echo self::D . $sep . self::R . PHP_EOL;
+        $header = '|';
+        foreach ($cols as $c) {
+            $header .= ' ' . self::B . str_pad($c, $widths[$c]) . self::R . self::D . ' |';
+        }
+        echo self::D . $header . self::R . PHP_EOL;
+        echo self::D . $sep . self::R . PHP_EOL;
+
+        foreach ($liste as $u) {
+            $u   = (array)$u;
+            $row = '|';
+            foreach ($cols as $c) {
+                $row .= ' ' . str_pad((string)($u[$c] ?? ''), $widths[$c]) . ' |';
+            }
+            echo $row . PHP_EOL;
+        }
+        echo self::D . $sep . self::R . PHP_EOL;
+        self::success(count($liste) . " utilisateur(s) trouvé(s).");
+    }
+
+    // ── user create ─────────────────────────────────────────
+    private static function userCreate(array $opts): void
+    {
+        $login    = $opts['login']    ?? null;
+        $password = $opts['password'] ?? null;
+        $nom      = $opts['nom']      ?? null;
+        $prenom   = $opts['prenom']   ?? '';
+        $niveau   = $opts['niveau']   ?? '';
+
+        if (!$login || !$password || !$nom) {
+            self::error("Options requises : --login <l> --password <p> --nom <n>\n"
+                . "  Options optionnelles : --prenom <p> --niveau <1-4>");
+            return;
+        }
+
+        $url = self::resolveApiUrl();
+        if (!$url) { self::error("URL de l'API introuvable."); return; }
+
+        $token = self::requireToken($url);
+        if (!$token) return;
+
+        self::info("Création de l'utilisateur " . self::B . self::C . $login . self::R . "...");
+
+        $params = http_build_query(array_filter([
+            'Action'      => 'USERAPI_CREATEUSER',
+            'LOGIN'       => $login,
+            'PASSWORD'    => $password,
+            'NOM'         => $nom,
+            'PRENOM'      => $prenom,
+            'NIVEAUACCES' => $niveau,
+            'Token'       => $token,
+        ], fn($v) => $v !== ''));
+
+        $rep = self::apiPost($url . '/?' . $params, $url);
+        if ($rep === null) return;
+
+        if ($rep->OK == 1) {
+            $id = $rep->Contenue->ID ?? '?';
+            self::success("Utilisateur " . self::B . $login . self::R . self::G . " créé (ID: {$id}).");
+        } else {
+            self::error("Échec : " . ($rep->TxErreur ?? 'Erreur inconnue'));
+        }
+    }
+
+    // ── user delete ─────────────────────────────────────────
+    private static function userDelete(array $opts): void
+    {
+        $id = $opts['id'] ?? null;
+        if (!$id) {
+            self::error("Option requise : --id <id_utilisateur>");
+            return;
+        }
+
+        $url = self::resolveApiUrl();
+        if (!$url) { self::error("URL de l'API introuvable."); return; }
+
+        $token = self::requireToken($url);
+        if (!$token) return;
+
+        self::info("Suppression de l'utilisateur ID " . self::B . self::C . $id . self::R . "...");
+
+        $params = http_build_query(['Action' => 'USERAPI_DELETEUSER', 'IDUSER' => $id, 'Token' => $token]);
+        $rep    = self::apiPost($url . '/?' . $params, $url);
+        if ($rep === null) return;
+
+        if ($rep->OK == 1) {
+            self::success("Utilisateur ID {$id} supprimé.");
+        } else {
+            self::error("Échec : " . ($rep->TxErreur ?? 'Erreur inconnue'));
+        }
+    }
+
+    // ── user set-login ──────────────────────────────────────
+    private static function userSetLogin(array $opts): void
+    {
+        $id    = $opts['id']    ?? null;
+        $login = $opts['login'] ?? null;
+        if (!$id || !$login) {
+            self::error("Options requises : --id <id> --login <nouveau_login>");
+            return;
+        }
+
+        $url = self::resolveApiUrl();
+        if (!$url) { self::error("URL de l'API introuvable."); return; }
+
+        $token = self::requireToken($url);
+        if (!$token) return;
+
+        self::info("Modification du login de l'utilisateur ID " . self::B . $id . self::R . "...");
+
+        $params = http_build_query(['Action' => 'USERAPI_SAVEUSER', 'ID' => $id, 'LOGIN' => $login, 'Token' => $token]);
+        $rep    = self::apiPost($url . '/?' . $params, $url);
+        if ($rep === null) return;
+
+        if ($rep->OK == 1) {
+            self::success("Login mis à jour → " . self::B . $login . self::R . self::G . ".");
+        } else {
+            self::error("Échec : " . ($rep->TxErreur ?? 'Erreur inconnue'));
+        }
+    }
+
+    // ── user set-pwd ────────────────────────────────────────
+    private static function userSetPwd(array $opts): void
+    {
+        $id       = $opts['id']       ?? null;
+        $password = $opts['password'] ?? null;
+        if (!$id || !$password) {
+            self::error("Options requises : --id <id> --password <nouveau_mot_de_passe>");
+            return;
+        }
+
+        $url = self::resolveApiUrl();
+        if (!$url) { self::error("URL de l'API introuvable."); return; }
+
+        $token = self::requireToken($url);
+        if (!$token) return;
+
+        self::info("Modification du mot de passe de l'utilisateur ID " . self::B . $id . self::R . "...");
+
+        $params = http_build_query(['Action' => 'USERAPI_SAVEUSER', 'ID' => $id, 'PASSWORD' => $password, 'Token' => $token]);
+        $rep    = self::apiPost($url . '/?' . $params, $url);
+        if ($rep === null) return;
+
+        if ($rep->OK == 1) {
+            self::success("Mot de passe mis à jour.");
+        } else {
+            self::error("Échec : " . ($rep->TxErreur ?? 'Erreur inconnue'));
+        }
+    }
+
+    // ============================================================
+    //  Gestion du token JWT
+    //
+    //  Stocké dans .nsy_token à la racine du projet hôte.
+    //  Si absent ou expiré (ERR:SESSION_EXP), demande les
+    //  credentials interactivement, s'authentifie et sauvegarde.
+    // ============================================================
+    private static function requireToken(string $baseUrl, bool $forceRefresh = false): ?string
+    {
+        $tokenFile = rtrim(self::$root, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . self::TOKEN_FILE;
+
+        // Lire le token stocké si pas de refresh forcé
+        if (!$forceRefresh && file_exists($tokenFile)) {
+            $token = trim(file_get_contents($tokenFile));
+            if (!empty($token)) return $token;
+        }
+
+        // ── Demande interactive des credentials ──────────────
+        echo PHP_EOL;
+        self::info("Authentification requise.");
+        echo self::Y . "  Login    : " . self::R;
+        $login = trim(fgets(STDIN));
+
+        // Masquer la saisie du mot de passe si possible
+        echo self::Y . "  Password : " . self::R;
+        if (PHP_OS_FAMILY === 'Windows') {
+            // PowerShell : pas de masquage natif via PHP — on avertit
+            $password = trim(fgets(STDIN));
+        } else {
+            shell_exec('stty -echo');
+            $password = trim(fgets(STDIN));
+            shell_exec('stty echo');
+            echo PHP_EOL;
+        }
+
+        if (empty($login) || empty($password)) {
+            self::error("Login et mot de passe requis.");
+            return null;
+        }
+
+        // ── Appel d'authentification ─────────────────────────
+        self::dim("  → Authentification en cours...");
+        $authUrl  = rtrim($baseUrl, '/') . '/auth?Login=' . urlencode($login) . '&Password=' . urlencode($password);
+        $response = self::httpPost($authUrl, []);
+
+        if ($response === null) {
+            self::error("Impossible de joindre l'API pour l'authentification.");
+            return null;
+        }
+
+        $json = json_decode($response);
+        if ($json === null || $json->OK != 1) {
+            self::error("Authentification échouée : " . ($json->TxErreur ?? 'Réponse invalide'));
+            return null;
+        }
+
+        $token = $json->Extra ?? null;
+        if (empty($token)) {
+            self::error("Token absent dans la réponse d'authentification.");
+            return null;
+        }
+
+        // ── Sauvegarde du token ──────────────────────────────
+        file_put_contents($tokenFile, $token);
+        self::success("Authentification réussie. Token sauvegardé.");
+
+        return $token;
+    }
+
+    // ============================================================
+    //  Appels HTTP pour les commandes user
+    //  Gère automatiquement ERR:SESSION_EXP → re-auth + retry
+    // ============================================================
+    private static function apiGet(string $url, string $baseUrl, bool $isRetry = false): ?object
+    {
+        $response = self::httpGet($url);
+        if ($response === null) {
+            self::error("Impossible de joindre l'API : {$url}");
+            return null;
+        }
+
+        if (self::$debug) self::dim("  Réponse brute : " . $response);
+
+        $json = json_decode($response);
+        if ($json === null) {
+            self::error("Réponse invalide (non JSON) : " . substr($response, 0, 200));
+            return null;
+        }
+
+        // ── Gestion expiration token ─────────────────────────
+        if (!$isRetry && isset($json->TxErreur) && $json->TxErreur === 'ERR:SESSION_EXP') {
+            self::info("Session expirée — re-authentification...");
+            $token = self::requireToken($baseUrl, true);
+            if (!$token) return null;
+            // Remplacer le token dans l'URL et retenter
+            $newUrl = preg_replace('/&Token=[^&]*/', '&Token=' . urlencode($token), $url);
+            return self::apiGet($newUrl, $baseUrl, true);
+        }
+
+        return $json;
+    }
+
+    private static function apiPost(string $url, string $baseUrl, bool $isRetry = false): ?object
+    {
+        $response = self::httpPost($url, []);
+        if ($response === null) {
+            self::error("Impossible de joindre l'API : {$url}");
+            return null;
+        }
+
+        if (self::$debug) self::dim("  Réponse brute : " . $response);
+
+        $json = json_decode($response);
+        if ($json === null) {
+            self::error("Réponse invalide (non JSON) : " . substr($response, 0, 200));
+            return null;
+        }
+
+        // ── Gestion expiration token ─────────────────────────
+        if (!$isRetry && isset($json->TxErreur) && $json->TxErreur === 'ERR:SESSION_EXP') {
+            self::info("Session expirée — re-authentification...");
+            $token = self::requireToken($baseUrl, true);
+            if (!$token) return null;
+            $newUrl = preg_replace('/&Token=[^&]*/', '&Token=' . urlencode($token), $url);
+            return self::apiPost($newUrl, $baseUrl, true);
+        }
+
+        return $json;
+    }
+
+    // ============================================================
+    //  HTTP POST léger
+    // ============================================================
+    private static function httpPost(string $url, array $data): ?string
+    {
+        if (function_exists('curl_init')) {
+            $ch = curl_init($url);
+            curl_setopt_array($ch, [
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_TIMEOUT        => 15,
+                CURLOPT_FOLLOWLOCATION => true,
+                CURLOPT_SSL_VERIFYPEER => false,
+                CURLOPT_POST           => true,
+                CURLOPT_POSTFIELDS     => $data,
+                CURLOPT_HTTPHEADER     => ['Accept: application/json'],
+            ]);
+            $response = curl_exec($ch);
+            $error    = curl_error($ch);
+            curl_close($ch);
+
+            if ($response === false) {
+                self::dim("  cURL erreur : " . $error);
+                return null;
+            }
+            return $response;
+        }
+
+        // Fallback : file_get_contents
+        $ctx = stream_context_create([
+            'http' => [
+                'method'  => 'POST',
+                'timeout' => 15,
+                'header'  => "Accept: application/json\r\nContent-Type: application/x-www-form-urlencoded\r\n",
+                'content' => http_build_query($data),
+            ],
+        ]);
+        $response = @file_get_contents($url, false, $ctx);
+        return $response === false ? null : $response;
+    }
+
+    // ============================================================
     //  Commande : version
     // ============================================================
     private static function cmdVersion(): void
@@ -1231,6 +1617,34 @@ class NAbySyCLI
     {$y}observer{$r} {$d}(obs|event){$r} <table> [nom]
         Enregistre un observateur de table dans db_structure.php.
         nom optionnel (défaut: valeur de table).
+
+  {$g}user{$r}
+    {$y}list{$r}
+        Liste les utilisateurs. Option {$d}--login <login>{$r} pour filtrer.
+
+    {$y}create{$r}
+        Crée un utilisateur.
+        {$d}--login <l>     (requis)
+        --password <p>  (requis)
+        --nom <n>       (requis)
+        --prenom <p>    (optionnel)
+        --niveau <1-4>  (optionnel){$r}
+
+    {$y}delete{$r}
+        Supprime un utilisateur.
+        {$d}--id <id>  (requis){$r}
+
+    {$y}set-login{$r}
+        Modifie le login d'un utilisateur.
+        {$d}--id <id> --login <nouveau_login>  (requis){$r}
+
+    {$y}set-pwd{$r}
+        Modifie le mot de passe d'un utilisateur.
+        {$d}--id <id> --password <nouveau_mdp>  (requis){$r}
+
+    {$d}Le token JWT est sauvegardé dans .nsy_token à la racine du projet.
+    Si absent ou expiré (ERR:SESSION_EXP), les credentials sont demandés
+    interactivement et le token est renouvelé automatiquement.{$r}
 
   {$g}db{$r}
     {$y}update{$r} {$d}(u){$r}
@@ -1286,6 +1700,13 @@ class NAbySyCLI
 
   {$c}{$bin} create categorie client --root /var/www/monprojet{$r}
   {$c}{$bin} create categorie client --struct structure/mon_fichier.php{$r}
+
+  {$c}{$bin} user list{$r}
+  {$c}{$bin} user list --login pharmcp{$r}
+  {$c}{$bin} user create --login dupont --password secret --nom Dupont --prenom Jean --niveau 2{$r}
+  {$c}{$bin} user delete --id 3{$r}
+  {$c}{$bin} user set-login --id 3 --login nouveau_login{$r}
+  {$c}{$bin} user set-pwd --id 3 --password nouveau_mdp{$r}
 
   {$c}{$bin} db update{$r}
   {$c}{$bin} db update --url http://kssv5/api/shop{$r}
