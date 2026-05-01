@@ -54,6 +54,12 @@ koro update
 koro update cli
 koro doc
 koro log             [app|sql|error] [--month=mmyyyy | --m=mmyyyy]
+koro user list       [--login <login>]
+koro user create     --login <l> --password <p> --nom <n> [--prenom <p>] [--niveau <1-4>]
+koro user delete     --id <id>
+koro user set-login  --id <id> --login <nouveau>
+koro user set-pwd    --id <id> --password <nouveau>
+koro user logout
 koro version
 koro help
 ```
@@ -312,6 +318,73 @@ koro log app --m 012026         # journal applicatif de janvier 2026
 
 ---
 
+### `koro user` — Gestion des utilisateurs
+
+Toutes les commandes `user` nécessitent une authentification. Le token JWT est sauvegardé dans `.nsy_token` à la racine du projet. Lors de la première utilisation (ou si le token est expiré), les credentials sont demandés interactivement.
+
+#### `koro user list` — Lister les utilisateurs
+
+```bash
+koro user list
+koro user list --login pharmcp   # filtrer par login
+```
+
+Affiche un tableau avec : ID, NOM, PRENOM, LOGIN, NIVEAUACCES, PROFILE, ETAT.
+
+---
+
+#### `koro user create` — Créer un utilisateur
+
+```bash
+koro user create --login dupont --password secret --nom Dupont --prenom Jean --niveau 2
+```
+
+| Option | Description |
+|--------|-------------|
+| `--login`    | Login de l'utilisateur (requis) |
+| `--password` | Mot de passe (requis) |
+| `--nom`      | Nom (requis) |
+| `--prenom`   | Prénom (optionnel) |
+| `--niveau`   | Niveau d'accès 1-4 (optionnel) |
+
+---
+
+#### `koro user delete` — Supprimer un utilisateur
+
+```bash
+koro user delete --id 3
+```
+
+---
+
+#### `koro user set-login` — Modifier le login
+
+```bash
+koro user set-login --id 3 --login nouveau_login
+```
+
+---
+
+#### `koro user set-pwd` — Modifier le mot de passe
+
+```bash
+koro user set-pwd --id 3 --password nouveau_mdp
+```
+
+---
+
+#### `koro user logout` — Déconnexion
+
+Supprime le token sauvegardé localement. Les prochaines commandes `user` demanderont à nouveau les credentials.
+
+```bash
+koro user logout
+```
+
+> Le fichier `.nsy_token` est créé à la racine du projet hôte. Pensez à l'ajouter à votre `.gitignore`.
+
+---
+
 ### `koro version`
 
 ```bash
@@ -398,6 +471,15 @@ koro log                        # tous les onglets — mois courant
 koro log app                    # journal applicatif seulement
 koro log sql --month 042026     # requêtes SQL d'avril 2026
 koro log error --m 012026       # erreurs SQL de janvier 2026
+
+# Gestion des utilisateurs
+koro user list
+koro user list --login pharmcp
+koro user create --login dupont --password secret --nom Dupont --prenom Jean --niveau 2
+koro user delete --id 3
+koro user set-login --id 3 --login nouveau_login
+koro user set-pwd --id 3 --password nouveau_mdp
+koro user logout
 
 # Debug activé
 koro create orm xProduit produits --debug

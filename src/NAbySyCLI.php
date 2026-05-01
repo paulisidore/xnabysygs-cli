@@ -1203,11 +1203,29 @@ class NAbySyCLI
             'delete'    => self::userDelete($opts),
             'set-login' => self::userSetLogin($opts),
             'set-pwd'   => self::userSetPwd($opts),
+            'logout'    => self::userLogout(),
             default     => self::error(
                 "Sous-commande 'user {$sub}' inconnue.\n"
-                . "  Utilisez: list | create | delete | set-login | set-pwd"
+                . "  Utilisez: list | create | delete | set-login | set-pwd | logout"
             ),
         };
+    }
+
+    // ── user logout ─────────────────────────────────────────
+    private static function userLogout(): void
+    {
+        $tokenFile = rtrim(self::$root, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . self::TOKEN_FILE;
+
+        if (!file_exists($tokenFile)) {
+            self::info("Aucune session active (fichier token absent).");
+            return;
+        }
+
+        if (@unlink($tokenFile)) {
+            self::success("Session terminée — token supprimé.");
+        } else {
+            self::error("Impossible de supprimer le fichier token : {$tokenFile}");
+        }
     }
 
     // ── user list ───────────────────────────────────────────
@@ -1488,7 +1506,7 @@ class NAbySyCLI
         }
 
         // ── Gestion expiration token ─────────────────────────
-        if (!$isRetry && isset($json->TxErreur) && $json->TxErreur === 'ERR:SESSION_EXP') {
+        if (!$isRetry && isset($json->TxErreur) && str_contains((string)$json->TxErreur, 'ERR:SESSION_EXP')) {
             self::info("Session expirée — re-authentification...");
             $token = self::requireToken($baseUrl, true);
             if (!$token) return null;
@@ -1517,7 +1535,7 @@ class NAbySyCLI
         }
 
         // ── Gestion expiration token ─────────────────────────
-        if (!$isRetry && isset($json->TxErreur) && $json->TxErreur === 'ERR:SESSION_EXP') {
+        if (!$isRetry && isset($json->TxErreur) && str_contains((string)$json->TxErreur, 'ERR:SESSION_EXP')) {
             self::info("Session expirée — re-authentification...");
             $token = self::requireToken($baseUrl, true);
             if (!$token) return null;
@@ -2295,6 +2313,9 @@ HTML;
         Modifie le mot de passe d'un utilisateur.
         {$d}--id <id> --password <nouveau_mdp>  (requis){$r}
 
+    {$y}logout{$r}
+        Supprime le token sauvegardé (déconnexion de la session locale).
+
     {$d}Le token JWT est sauvegardé dans .nsy_token à la racine du projet.
     Si absent ou expiré (ERR:SESSION_EXP), les credentials sont demandés
     interactivement et le token est renouvelé automatiquement.{$r}
@@ -2363,6 +2384,7 @@ HTML;
   {$c}{$bin} create categorie client --root /var/www/monprojet{$r}
   {$c}{$bin} create categorie client --struct structure/mon_fichier.php{$r}
 
+  {$c}{$bin} user logout{$r}
   {$c}{$bin} user list{$r}
   {$c}{$bin} user list --login pharmcp{$r}
   {$c}{$bin} user create --login dupont --password secret --nom Dupont --prenom Jean --niveau 2{$r}
