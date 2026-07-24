@@ -136,6 +136,62 @@ class NAbySyCLI
         'set-pwd'   => 'set-pwd',
     ];
 
+    /**
+     * S'assure que l'utilisateur en cour est bien dans le groupe apache (www-data)
+     * si nous sommes sur des machine Linux/Unix/macOS
+     * @return void 
+     * @throws Exception 
+     */
+    private function verifierGroupeApache() {
+        if (PHP_OS_FAMILY === 'Windows') {
+            return; 
+        }
+        
+        // 1. Cette vérification ne fonctionne que sur les systèmes Linux/Unix
+        if (!function_exists('posix_getegid')) {
+            return; 
+        }
+
+        // 2. Récupérer les informations de l'utilisateur qui lance le script
+        $currentUserInfo = posix_getpwuid(posix_getuid());
+        $currentUsername = $currentUserInfo['name'];
+
+        // 3. Récupérer l'ID du groupe Apache (généralement www-data)
+        $apacheGroupInfo = posix_getgrnam('www-data');
+        
+        if (!$apacheGroupInfo) {
+            // Si le groupe www-data n'existe pas (ex: sur CentOS/RHEL c'est 'apache')
+            $apacheGroupInfo = posix_getgrnam('apache');
+        }
+
+        if (!$apacheGroupInfo) {
+            throw new Exception("Erreur de déploiement : Le groupe système d'Apache (www-data ou apache) est introuvable sur ce serveur.");
+        }
+
+        $apacheGid = $apacheGroupInfo['gid'];
+
+        // 4. Récupérer la liste de TOUS les ID de groupes de l'utilisateur actuel
+        $userGroupIds = posix_getgroups();
+
+        // 5. Vérifier si l'ID du groupe Apache est dans la liste de l'utilisateur
+        if (!in_array($apacheGid, $userGroupIds)) {
+            $nomGroupeCible = $apacheGroupInfo['name'];
+            
+            $message = PHP_EOL . "=====================================================================" . PHP_EOL;
+            $message .= "❌ ERREUR DE CONFIGURATION SYSTÈME SÉCURITÉ" . PHP_EOL;
+            $message .= "=====================================================================" . PHP_EOL;
+            $message .= "L'utilisateur actuel '$currentUsername' ne fait pas partie du groupe Apache '$nomGroupeCible'." . PHP_EOL;
+            $message .= "Pour corriger cela sur ce nouveau serveur, exécutez la commande suivante :" . PHP_EOL . PHP_EOL;
+            $message .= "    sudo usermod -aG $nomGroupeCible $currentUsername" . PHP_EOL . PHP_EOL;
+            $message .= "⚠️  IMPORTANT : Après avoir exécuté la commande, déconnectez-vous et" . PHP_EOL;
+            $message .= "   reconnectez-vous à votre session SSH pour appliquer les changements," . PHP_EOL;
+            $message .= "   puis relancez le déploiement." . PHP_EOL;
+            $message .= "=====================================================================" . PHP_EOL;
+
+            throw new Exception($message);
+        }
+    }
+
     private static bool   $debug      = false;
     private static string $root       = '';
     private static string $structFile = '';
@@ -936,6 +992,15 @@ class NAbySyCLI
                 . "  " . self::Y . "composer require nabysyphpapi/xnabysygs" . self::R
             );
             exit(1);
+        }
+
+        // Exemple d'utilisation dans votre script de déploiement :
+        try {
+            self::verifierGroupeApache();
+            echo "✅ Vérification du groupe système réussie." . PHP_EOL;
+        } catch (Exception $e) {
+            echo $e->getMessage();
+            exit(1); // Arrête le déploiement proprement avec un code d'erreur
         }
 
         self::info("Initialisation du projet " . self::B . self::C . $nomProjet . self::R . "...");
