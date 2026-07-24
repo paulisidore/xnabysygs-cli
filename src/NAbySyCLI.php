@@ -37,7 +37,7 @@ class NAbySyCLI
     private const B  = "\033[1m";
     private const D  = "\033[2m";
 
-    private const VERSION = '1.4.2'; // Fallback si composer.json illisible
+    private const VERSION = '1.5.3'; // Fallback si composer.json illisible
 
     // ── Lecture dynamique de la version depuis composer.json ─
     private static function getVersion(): string
@@ -952,6 +952,11 @@ class NAbySyCLI
             'name'        => $vendor . '/' . $slug,
             'description' => $description,
             'type'        => 'project',
+            'scripts'     => [
+                'post-autoload-dump'    =>  [
+                    'chmod -R 775 vendor/nabysyphpapi'
+                ]
+            ],
             'require'     => [
                 'php'                    => '>=8.1',
                 'nabysyphpapi/xnabysygs' => '*',
