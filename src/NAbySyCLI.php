@@ -1020,7 +1020,8 @@ class NAbySyCLI
             'scripts'     => [
                 'post-autoload-dump'    =>  [
                     // Commande inline universelle qui s'exécute silencieusement sur Windows
-                    "php -r \"if(PHP_OS_FAMILY !== 'Windows') shell_exec('chmod -R 775 vendor/nabysyphpapi');\""
+                    "php -r \"if(PHP_OS_FAMILY !== 'Windows') shell_exec('chmod -R 775 vendor/nabysyphpapi');\"",
+                    "php -r \"if(PHP_OS_FAMILY !== 'Windows') shell_exec('chown -R www-data:www-data  vendor/nabysyphpapi');\""
                 ]
             ],
             'require'     => [
