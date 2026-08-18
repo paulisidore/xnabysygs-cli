@@ -996,8 +996,12 @@ class NAbySyCLI
 
         // Exemple d'utilisation dans votre script de déploiement :
         try {
-            self::verifierGroupeApache();
-            echo "✅ Vérification du groupe système réussie." . PHP_EOL;
+            if(PHP_OS_FAMILY !== 'Windows'){
+                self::verifierGroupeApache();
+                echo "✅ Vérification du groupe système réussie." . PHP_EOL;
+            }else{
+                echo "✅ Pas de vérification du groupe Apache sous Windows." . PHP_EOL;
+            }
         } catch (Exception $e) {
             echo $e->getMessage();
             exit(1); // Arrête le déploiement proprement avec un code d'erreur
